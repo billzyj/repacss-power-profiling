@@ -95,6 +95,14 @@ python -m src.cli analyze --database h100 --hostname rpg-93-1 --hours 6
 # Energy calculation (single node)
 python -m src.cli energy --database h100 --hostname rpg-93-1 --hours 24
 
+# PUE calculation (cluster-wide)
+python -m src.cli pue --hours 24
+python -m src.cli pue --start-time "2025-01-01 00:00:00" --end-time "2025-01-02 00:00:00"
+
+# Daily PUE report (Excel)
+python -m src.cli pue-daily --start-day 2025-07-17
+python -m src.cli pue-daily --start-day 2025-01-01 --end-day 2025-06-30 --output output/pue/pue_daily.xlsx
+
 # Rack analysis (infra)
 python -m src.cli rack --rack 97 --hours 24
 
@@ -120,7 +128,11 @@ python -m src.cli custom --format csv --output report.csv
 # Analysis commands
 python -m src.cli analyze --database h100 --hostname rpg-93-1
 python -m src.cli energy --database h100 --hostname rpg-93-1 --hours 24
+python -m src.cli pue --hours 24
 python -m src.cli rack --rack 97 --hours 24
+
+# Reporting commands
+python -m src.cli pue-daily --start-day 2025-07-17
 
 # Reporting commands  
 python -m src.cli excel --databases h100 zen4 infra
@@ -135,6 +147,10 @@ python -m src.cli databases
 
 ### Analysis Types
 
+- **PUE Analysis**: Cluster-wide Power Usage Effectiveness calculation
+  - Formula: PUE = (Total IRC Power + Total PDU Power) / Total PDU Power
+  - Calculates energy consumption for all IRC and PDU nodes
+  - Provides PUE value with interpretation (Excellent/Good/Average/Poor)
 - **Rack Analysis**: Multi-rack power validation with estimation
 - **Node Analysis**: Individual node power consumption tracking
 - **Infrastructure Analysis**: PDU and cooling system power monitoring

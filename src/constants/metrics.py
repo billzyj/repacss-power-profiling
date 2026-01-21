@@ -2,8 +2,15 @@
 Metric definitions for REPACSS Power Measurement
 """
 
-# IRC (Infrastructure) power metrics
+# IRC (Infrastructure) power metrics for PUE calculation
+# Only CompressorPower and CondenserFanPower represent actual power consumption
 IRC_POWER_METRICS = [
+    'CompressorPower',  # Unit: kW
+    'CondenserFanPower',  # Unit: W
+]
+
+# All IRC metrics (for other analysis purposes)
+IRC_ALL_METRICS = [
     'CompressorPower', 
     'CondenserFanPower', 
     'CoolDemand', 
@@ -12,8 +19,14 @@ IRC_POWER_METRICS = [
     'TotalSensibleCoolingPower'
 ]
 
+IRC_SENSING_FREQUENCY = 120 #seconds
+
 # PDU (Power Distribution Unit) power metrics
 PDU_POWER_METRICS = ['pdu']
+
+PDU_SENSING_FREQUENCY = 60 #seconds
+
+COMPUTE_SENSING_FREQUENCY = 5 #seconds
 
 # Metrics to exclude from graphs (not power consumption)
 EXCLUDED_METRICS = [

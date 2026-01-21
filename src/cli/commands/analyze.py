@@ -169,6 +169,148 @@ def energy(database, hostname, start_time, end_time, hours):
 
 
 @click.command()
+@click.option('--start-time', 
+              help='Start time (YYYY-MM-DD HH:MM:SS)')
+@click.option('--end-time', 
+              help='End time (YYYY-MM-DD HH:MM:SS)')
+@click.option('--hours', 
+              type=int, 
+              default=24,
+              help='Number of hours to analyze (if no start/end time specified)')
+@click.option('--debug', 
+              is_flag=True,
+              default=False,
+              help='Show detailed debug information')
+def pue(start_time, end_time, hours, debug):
+    """
+    Calculate PUE (Power Usage Effectiveness) for the entire cluster.
+    
+    PUE = (Total IRC Power Consumption + Total PDU Power Consumption) / Total PDU Power Consumption
+    
+    Examples:
+        # Calculate PUE for last 24 hours
+        python -m src.cli pue
+        
+        # Calculate PUE for custom time range
+        python -m src.cli pue --start-time "2025-01-01 00:00:00" --end-time "2025-01-02 00:00:00"
+        
+        # Calculate PUE for last 6 hours
+        python -m src.cli pue --hours 6
+    """
+    
+    # Parse time range
+    if start_time and end_time:
+        start_dt = datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
+        end_dt = datetime.strptime(end_time, '%Y-%m-%d %H:%M:%S')
+    elif start_time:
+        start_dt = datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
+        end_dt = start_dt + timedelta(hours=hours)
+    else:
+        end_dt = datetime.now()
+        start_dt = end_dt - timedelta(hours=hours)
+    
+    # Configure logging level
+    import logging
+    if debug:
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    else:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    click.echo("📊 Calculating PUE (Power Usage Effectiveness)...")
+    click.echo(f"📅 Time range: {start_dt} to {end_dt}")
+    if debug:
+        click.echo("🔍 Debug mode: ON")
+    click.echo()
+    
+    try:
+        # Initialize service (use infra database for IRC and PDU nodes)
+        service = PowerAnalysisService('infra')
+        
+        # Calculate PUE
+        results = service.calculate_pue(start_dt, end_dt)
+        
+        if 'error' in results:
+            click.echo(f"❌ PUE calculation failed: {results['error']}")
+            return
+        
+        # Display results
+        click.echo("=" * 70)
+        click.echo("PUE Calculation Results")
+        click.echo("=" * 70)
+        click.echo()
+        
+        # IRC Summary
+        irc_data = results.get('irc', {})
+        click.echo("🌡️  IRC (Infrastructure Cooling) Power Consumption")
+        click.echo("-" * 70)
+        click.echo(f"Total Energy:     {irc_data.get('total_energy_kwh', 0):12.4f} kWh")
+        click.echo(f"Average Power:    {irc_data.get('avg_power_kw', 0):12.4f} kW")
+        click.echo(f"Nodes Analyzed:   {irc_data.get('successful_nodes', 0):12d} / {irc_data.get('node_count', 0)}")
+        
+        # Show detailed node information in debug mode
+        if debug and 'nodes' in irc_data:
+            click.echo()
+            click.echo("  Detailed IRC Node Breakdown:")
+            for node_name, node_info in irc_data['nodes'].items():
+                if 'error' in node_info:
+                    click.echo(f"    {node_name}: ERROR - {node_info['error']}")
+                else:
+                    click.echo(f"    {node_name}: {node_info.get('energy_kwh', 0):.6f} kWh")
+                    if 'metrics' in node_info:
+                        for metric, energy in node_info['metrics'].items():
+                            click.echo(f"      - {metric}: {energy:.6f} kWh")
+        click.echo()
+        
+        # PDU Summary
+        pdu_data = results.get('pdu', {})
+        click.echo("⚡ PDU (Power Distribution Unit) Power Consumption")
+        click.echo("-" * 70)
+        click.echo(f"Total Energy:     {pdu_data.get('total_energy_kwh', 0):12.4f} kWh")
+        click.echo(f"Average Power:    {pdu_data.get('avg_power_kw', 0):12.4f} kW")
+        click.echo(f"Nodes Analyzed:   {pdu_data.get('successful_nodes', 0):12d} / {pdu_data.get('node_count', 0)}")
+        click.echo()
+        
+        # PUE Result
+        pue_data = results.get('pue', {})
+        pue_value = pue_data.get('value')
+        
+        click.echo("📈 PUE (Power Usage Effectiveness)")
+        click.echo("-" * 70)
+        if pue_value is not None:
+            click.echo(f"PUE Value:        {pue_value:12.4f}")
+            click.echo(f"Formula:          {pue_data.get('formula', '')}")
+            click.echo()
+            click.echo(f"Total Energy:     {pue_data.get('total_energy_kwh', 0):12.4f} kWh")
+            click.echo(f"Average Power:    {pue_data.get('avg_power_kw', 0):12.4f} kW")
+            
+            # PUE interpretation
+            click.echo()
+            if pue_value == 0.0:
+                click.echo("⚠️  PUE = 0: Entire cluster is down (both IRC and PDU have no readings)")
+            elif pue_value == 1.0:
+                click.echo("⚠️  PUE = 1: IRC is down (no IRC readings, but PDU is operational)")
+            elif pue_value < 1.2:
+                click.echo("✅ Excellent PUE (< 1.2)")
+            elif pue_value < 1.5:
+                click.echo("✅ Good PUE (1.2 - 1.5)")
+            elif pue_value < 2.0:
+                click.echo("⚠️  Average PUE (1.5 - 2.0)")
+            else:
+                click.echo("❌ Poor PUE (> 2.0)")
+        else:
+            click.echo("❌ Cannot calculate PUE: No PDU power data available")
+        
+        click.echo()
+        click.echo("=" * 70)
+        
+    except Exception as e:
+        click.echo(f"❌ Error during PUE calculation: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+@click.command()
 @click.option('--rack', 
               type=int,
               help='Rack number (91-97)')

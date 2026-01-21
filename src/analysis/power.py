@@ -47,7 +47,8 @@ class PowerAnalyzer:
             if node_type == 'pdu':
                 metrics = ['pdu']  # PDU_POWER_METRICS
             elif node_type == 'irc':
-                metrics = ['CompressorPower', 'CondenserFanPower', 'CoolDemand', 'CoolOutput', 'TotalAirSideCoolingDemand', 'TotalSensibleCoolingPower']  # IRC_POWER_METRICS
+                from constants.metrics import IRC_ALL_METRICS
+                metrics = IRC_ALL_METRICS
             else:  # compute nodes - get from database
                 metrics = self._get_compute_power_metrics(database, schema)
         
