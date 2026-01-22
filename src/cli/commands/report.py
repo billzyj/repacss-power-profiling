@@ -279,3 +279,256 @@ def pue_daily(start_day, end_day, days, start_date, end_date, output, debug):
     except Exception as e:
         click.echo(f"❌ Error generating daily PUE report: {e}")
         sys.exit(1)
+
+
+@click.command(name="rack-cop")
+@click.option("--start-time", type=str, help="Start time (YYYY-MM-DD HH:MM:SS)")
+@click.option("--end-time", type=str, help="End time (YYYY-MM-DD HH:MM:SS)")
+@click.option("--hours", type=int, default=168, help="Number of hours to analyze (default: 168 = 1 week)")
+@click.option("--output", type=str, help="Output Excel path (default: auto-generated under output/)")
+@click.option("--debug", is_flag=True, default=False, help="Enable debug logging")
+def rack_cop(start_time, end_time, hours, output, debug):
+    """
+    Calculate rack-level power consumption and COP (Coefficient of Performance) for all racks.
+    
+    For each rack with an IRC node, calculates:
+    - CompressorPower energy (kWh)
+    - CondenserFanPower energy (kWh)
+    - CoolDemand energy (kWh)
+    - COP = CoolDemand / (CompressorPower + CondenserFanPower)
+    
+    Examples:
+        # Calculate COP for last week (168 hours)
+        python -m src.cli rack-cop
+        
+        # Calculate COP for custom time range
+        python -m src.cli rack-cop --start-time "2025-01-01 00:00:00" --end-time "2025-01-08 00:00:00"
+        
+        # Calculate COP for last 24 hours
+        python -m src.cli rack-cop --hours 24
+    """
+    import logging
+    import pandas as pd
+
+    logging.basicConfig(
+        level=logging.DEBUG if debug else logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s" if debug else "%(asctime)s - %(levelname)s - %(message)s",
+    )
+
+    # Parse time range
+    if start_time and end_time:
+        start_dt = datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
+        end_dt = datetime.strptime(end_time, '%Y-%m-%d %H:%M:%S')
+    elif start_time:
+        start_dt = datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
+        end_dt = start_dt + timedelta(hours=hours)
+    else:
+        end_dt = datetime.now()
+        start_dt = end_dt - timedelta(hours=hours)
+
+    if not output:
+        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        os.makedirs("output/rack", exist_ok=True)
+        output = f"output/rack/rack_cop_{start_dt.strftime('%Y%m%d_%H%M%S')}_to_{end_dt.strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+    click.echo("📊 Calculating rack-level COP...")
+    click.echo(f"📅 Time range: {start_dt} to {end_dt}")
+    click.echo(f"📁 Output: {output}")
+    if debug:
+        click.echo("🔍 Debug mode: ON")
+    click.echo()
+
+    try:
+        service = PowerAnalysisService("infra")
+        result = service.calculate_rack_cop(start_dt, end_dt)
+        
+        if isinstance(result, dict) and "error" in result:
+            click.echo(f"❌ Failed: {result['error']}")
+            sys.exit(1)
+
+        # Display results
+        click.echo("=" * 70)
+        click.echo("Rack-Level COP Analysis Results")
+        click.echo("=" * 70)
+        click.echo()
+        
+        racks = result.get('racks', {})
+        summary = result.get('summary', {})
+        
+        # Display summary
+        click.echo(f"Total Racks: {summary.get('total_racks', 0)}")
+        click.echo(f"Racks with Data: {summary.get('racks_with_data', 0)}")
+        if summary.get('avg_cop') is not None:
+            click.echo(f"Average COP: {summary.get('avg_cop', 0):.4f}")
+        click.echo()
+        
+        # Display per-rack results
+        click.echo("Rack Details:")
+        click.echo("-" * 70)
+        click.echo(f"{'Rack':<6} {'IRC Node':<12} {'Compressor (kWh)':<18} {'Fan (kWh)':<15} {'CoolDemand (kWh)':<18} {'COP':<10}")
+        click.echo("-" * 70)
+        
+        for rack_num in sorted(racks.keys()):
+            rack_data = racks[rack_num]
+            cop_str = f"{rack_data['cop']:>8.4f}" if rack_data['cop'] is not None else f"{'N/A':>8}"
+            click.echo(
+                f"{rack_num:<6} "
+                f"{rack_data['irc_node']:<12} "
+                f"{rack_data['compressor_power_kwh']:>16.4f} "
+                f"{rack_data['condenser_fan_power_kwh']:>13.4f} "
+                f"{rack_data['cool_demand_kwh']:>16.4f} "
+                f"{cop_str}"
+            )
+        
+        click.echo()
+        click.echo("=" * 70)
+        
+        # Export to Excel
+        rows = []
+        for rack_num in sorted(racks.keys()):
+            rack_data = racks[rack_num]
+            rows.append({
+                'rack': rack_num,
+                'irc_node': rack_data['irc_node'],
+                'compressor_power_kwh': rack_data['compressor_power_kwh'],
+                'condenser_fan_power_kwh': rack_data['condenser_fan_power_kwh'],
+                'cool_demand_kwh': rack_data['cool_demand_kwh'],
+                'cop': rack_data['cop'] if rack_data['cop'] is not None else None
+            })
+        
+        df = pd.DataFrame(rows)
+        
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, sheet_name="Rack_COP", index=False)
+            
+            # Add summary sheet
+            summary_df = pd.DataFrame([{
+                'start_time': start_dt,
+                'end_time': end_dt,
+                'duration_hours': summary.get('duration_hours', 0),
+                'total_racks': summary.get('total_racks', 0),
+                'racks_with_data': summary.get('racks_with_data', 0),
+                'avg_cop': summary.get('avg_cop', None)
+            }])
+            summary_df.to_excel(writer, sheet_name="Summary", index=False)
+        
+        click.echo(f"✅ Excel report saved: {output}")
+        
+    except Exception as e:
+        click.echo(f"❌ Error generating rack COP report: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+@click.command(name="rack-cop-daily")
+@click.option("--start-day", type=str, required=True, help="Start date (YYYY-MM-DD), required")
+@click.option("--end-day", type=str, help="End date (YYYY-MM-DD), default: today (UTC)")
+@click.option("--max-gap-minutes", type=int, default=10, show_default=True, help="Max time gap (minutes) for interpolation. Gaps larger than this are treated as zero power.")
+@click.option("--output", type=str, help="Output Excel path (default: auto-generated under output/)")
+@click.option("--debug", is_flag=True, default=False, help="Enable debug logging")
+def rack_cop_daily(start_day, end_day, max_gap_minutes, output, debug):
+    """
+    Calculate daily rack-level power consumption and COP for a time range.
+    
+    For each rack (91-96) and each day, calculates:
+    - CompressorPower energy (kWh)
+    - CondenserFanPower energy (kWh)
+    - CoolDemand energy (kWh)
+    - COP = CoolDemand / (CompressorPower + CondenserFanPower)
+    
+    Output Excel columns: Date, Rack, IRC Node, Compressor (kWh), Fan (kWh), CoolDemand (kWh), COP
+    
+    Examples:
+        # Calculate daily COP from start date to today
+        python -m src.cli rack-cop-daily --start-day 2025-01-01
+        
+        # Calculate daily COP for a specific date range
+        python -m src.cli rack-cop-daily --start-day 2025-01-01 --end-day 2025-06-30
+    """
+    import logging
+    import pandas as pd
+
+    logging.basicConfig(
+        level=logging.DEBUG if debug else logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s" if debug else "%(asctime)s - %(levelname)s - %(message)s",
+    )
+
+    # Parse date arguments
+    try:
+        start_dt = datetime.strptime(start_day, '%Y-%m-%d')
+        start_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    except ValueError:
+        click.echo(f"❌ Invalid start-day format: {start_day}. Use YYYY-MM-DD")
+        sys.exit(1)
+    
+    if end_day:
+        try:
+            end_dt = datetime.strptime(end_day, '%Y-%m-%d')
+            end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        except ValueError:
+            click.echo(f"❌ Invalid end-day format: {end_day}. Use YYYY-MM-DD")
+            sys.exit(1)
+    else:
+        # Default to today (UTC)
+        end_dt = datetime.utcnow()
+        end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    
+    if end_dt < start_dt:
+        click.echo(f"❌ end-day must be after start-day")
+        sys.exit(1)
+
+    if not output:
+        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        os.makedirs("output/rack", exist_ok=True)
+        output = f"output/rack/rack_cop_daily_{start_dt.strftime('%Y%m%d')}_to_{end_dt.strftime('%Y%m%d')}_{ts}.xlsx"
+
+    click.echo("📊 Calculating daily rack-level COP...")
+    click.echo(f"📅 Date range: {start_dt.date()} to {end_dt.date()}")
+    click.echo(f"📁 Output: {output}")
+    if debug:
+        click.echo("🔍 Debug mode: ON")
+    click.echo()
+
+    try:
+        service = PowerAnalysisService("infra")
+        result = service.calculate_rack_cop_daily(start_dt, end_dt, max_gap_minutes=max_gap_minutes)
+        
+        if isinstance(result, dict) and "error" in result:
+            click.echo(f"❌ Failed: {result['error']}")
+            sys.exit(1)
+
+        df = result["data"]
+        
+        # Rename columns for Excel (friendly names)
+        df = df.rename(
+            columns={
+                "date": "Date",
+                "rack": "Rack",
+                "irc_node": "IRC Node",
+                "compressor_power_kwh": "Compressor (kWh)",
+                "condenser_fan_power_kwh": "Fan (kWh)",
+                "cool_demand_kwh": "CoolDemand (kWh)",
+                "cop": "COP",
+            }
+        )
+
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, sheet_name="Daily_Rack_COP", index=False)
+            
+            # Add summary sheet
+            summary = result.get("summary", {})
+            summary_df = pd.DataFrame([{
+                'start_date': summary.get('start_date'),
+                'end_date': summary.get('end_date'),
+                'days': summary.get('days', 0),
+                'racks': summary.get('racks', 0),
+            }])
+            summary_df.to_excel(writer, sheet_name="Summary", index=False)
+
+        click.echo(f"✅ Done: {output}")
+    except Exception as e:
+        click.echo(f"❌ Error generating daily rack COP report: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

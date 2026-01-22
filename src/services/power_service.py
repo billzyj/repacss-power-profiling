@@ -700,6 +700,395 @@ class PowerAnalysisService:
         except Exception as e:
             return {"error": str(e)}
     
+    def calculate_rack_cop(self, start_time: datetime, end_time: datetime) -> Dict[str, Any]:
+        """
+        Calculate rack-level power consumption and COP (Coefficient of Performance) for all racks.
+        
+        For each rack with an IRC node:
+        - CompressorPower energy (kWh)
+        - CondenserFanPower energy (kWh)
+        - CoolDemand energy (kWh)
+        - COP = CoolDemand / (CompressorPower + CondenserFanPower)
+        
+        Rack to IRC node mapping:
+        - Rack 91 -> irc-91-5
+        - Rack 92 -> irc-92-5
+        - Rack 93 -> irc-93-3
+        - Rack 94 -> irc-94-5
+        - Rack 95 -> irc-95-3
+        - Rack 96 -> irc-96-5
+        
+        Args:
+            start_time: Start timestamp
+            end_time: End timestamp
+        
+        Returns:
+            Dictionary with rack-level COP analysis results
+        """
+        from database.database import get_raw_database_connection
+        from queries.infra.irc_pdu import get_irc_metrics_with_joins
+        from sqlalchemy import create_engine
+        import pandas as pd
+        
+        # Rack to IRC node mapping
+        RACK_TO_IRC = {
+            91: 'irc-91-5',
+            92: 'irc-92-5',
+            93: 'irc-93-3',
+            94: 'irc-94-5',
+            95: 'irc-95-3',
+            96: 'irc-96-5'
+        }
+        
+        # Metrics needed for COP calculation
+        COP_METRICS = ['CompressorPower', 'CondenserFanPower', 'CoolDemand']
+        
+        from constants.metrics import IRC_SENSING_FREQUENCY
+        from utils.conversions import convert_power_series_to_watts
+        
+        def _energy_kwh_for_host_df(host_df: "pd.DataFrame", unit: str, hostname: str) -> float:
+            """Trapezoidal energy (kWh) for a hostname, skipping intervals with large gaps (> 4x sensing frequency)."""
+            if host_df is None or host_df.empty:
+                return 0.0
+
+            # IRC nodes use 4x IRC_SENSING_FREQUENCY
+            max_gap_seconds = 4.0 * IRC_SENSING_FREQUENCY  # 4 * 120 = 480 seconds (8 minutes)
+
+            df = host_df.copy()
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+            df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+            if len(df) < 2:
+                return 0.0
+
+            df["power_w"] = convert_power_series_to_watts(df["value"], unit).astype("float64")
+            ts = df["timestamp"].to_list()
+            pw = df["power_w"].to_list()
+
+            total_j = 0.0
+            for i in range(1, len(ts)):
+                t0 = ts[i - 1]
+                t1 = ts[i]
+                if t1 <= t0:
+                    continue
+                dt = (t1 - t0).total_seconds()
+                # Data quality: don't bridge large gaps (> 4x sensing frequency)
+                if dt > max_gap_seconds:
+                    # Treat missing interval as 0 power (skip)
+                    continue
+                total_j += ((float(pw[i - 1]) + float(pw[i])) / 2.0) * dt
+
+            return float(total_j) / 3_600_000.0
+        
+        try:
+            start_time_str = start_time.strftime('%Y-%m-%d %H:%M:%S')
+            end_time_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
+            
+            rack_results = {}
+            
+            # Use a single connection to infra database
+            db_connection = get_raw_database_connection('infra', 'public')
+            try:
+                engine = create_engine(
+                    f"postgresql://{db_connection.info.user}:{db_connection.info.password}@"
+                    f"{db_connection.info.host}:{db_connection.info.port}/{db_connection.info.dbname}"
+                )
+                
+                # Query all metrics for all IRC nodes at once (batch query)
+                for metric in COP_METRICS:
+                    try:
+                        query = get_irc_metrics_with_joins(metric, hostname=None, start_time=start_time_str, end_time=end_time_str)
+                        df = pd.read_sql_query(query, engine)
+                        
+                        if not df.empty:
+                            unit = df['units'].iloc[0] if 'units' in df.columns else 'W'
+                            
+                            # Calculate energy for each IRC node (rack) using the same energy calculation logic
+                            for rack_num, irc_node in RACK_TO_IRC.items():
+                                if rack_num not in rack_results:
+                                    rack_results[rack_num] = {
+                                        'irc_node': irc_node,
+                                        'compressor_power_kwh': 0.0,
+                                        'condenser_fan_power_kwh': 0.0,
+                                        'cool_demand_kwh': 0.0,
+                                        'cop': None
+                                    }
+                                
+                                # Use the same energy calculation function as in calculate_pue
+                                node_df = df[df["hostname"] == irc_node].copy() if "hostname" in df.columns else None
+                                node_energy = _energy_kwh_for_host_df(node_df, unit, irc_node)
+                                
+                                if metric == 'CompressorPower':
+                                    rack_results[rack_num]['compressor_power_kwh'] = node_energy
+                                elif metric == 'CondenserFanPower':
+                                    rack_results[rack_num]['condenser_fan_power_kwh'] = node_energy
+                                elif metric == 'CoolDemand':
+                                    rack_results[rack_num]['cool_demand_kwh'] = node_energy
+                    except Exception as e:
+                        logger.error(f"Error querying IRC metric {metric}: {e}", exc_info=True)
+                
+                # Calculate COP for each rack
+                for rack_num in rack_results:
+                    comp_power = rack_results[rack_num]['compressor_power_kwh']
+                    fan_power = rack_results[rack_num]['condenser_fan_power_kwh']
+                    cool_demand = rack_results[rack_num]['cool_demand_kwh']
+                    total_power = comp_power + fan_power
+                    
+                    if total_power > 0:
+                        rack_results[rack_num]['cop'] = cool_demand / total_power
+                    else:
+                        rack_results[rack_num]['cop'] = None
+                
+            finally:
+                if db_connection:
+                    db_connection.close()
+            
+            # Calculate time duration
+            duration_hours = (end_time - start_time).total_seconds() / 3600.0
+            
+            # Calculate time duration
+            duration_hours = (end_time - start_time).total_seconds() / 3600.0
+            
+            # Calculate summary statistics
+            racks_with_data = [r for r in rack_results.values() if r['cop'] is not None]
+            avg_cop = None
+            if racks_with_data:
+                avg_cop = sum([r['cop'] for r in racks_with_data]) / len(racks_with_data)
+            
+            return {
+                'time_range': {
+                    'start': start_time,
+                    'end': end_time,
+                    'duration_hours': duration_hours
+                },
+                'racks': rack_results,
+                'summary': {
+                    'total_racks': len(rack_results),
+                    'racks_with_data': len(racks_with_data),
+                    'avg_cop': avg_cop,
+                    'duration_hours': duration_hours
+                }
+            }
+            
+        except Exception as e:
+            return {'error': str(e)}
+    
+    def calculate_rack_cop_daily(self, start_time: datetime, end_time: datetime, max_gap_minutes: int = 10) -> Dict[str, Any]:
+        """
+        Calculate daily rack-level power consumption and COP for a time range.
+        
+        For each rack (91-96) and each day, calculates:
+        - CompressorPower energy (kWh)
+        - CondenserFanPower energy (kWh)
+        - CoolDemand energy (kWh)
+        - COP = CoolDemand / (CompressorPower + CondenserFanPower)
+        
+        Returns a DataFrame with columns: date, rack, irc_node, compressor_power_kwh, 
+        condenser_fan_power_kwh, cool_demand_kwh, cop
+        
+        Args:
+            start_time: Start timestamp
+            end_time: End timestamp
+            max_gap_minutes: Max time gap (minutes) for interpolation. Gaps larger than this are treated as zero power.
+        
+        Returns:
+            Dictionary with daily rack COP analysis results
+        """
+        from database.database import get_raw_database_connection
+        from queries.infra.irc_pdu import get_irc_metrics_with_joins
+        from utils.conversions import convert_power_series_to_watts
+        from sqlalchemy import create_engine
+        import pandas as pd
+        from constants.metrics import IRC_SENSING_FREQUENCY
+        
+        # Rack to IRC node mapping
+        RACK_TO_IRC = {
+            91: 'irc-91-5',
+            92: 'irc-92-5',
+            93: 'irc-93-3',
+            94: 'irc-94-5',
+            95: 'irc-95-3',
+            96: 'irc-96-5'
+        }
+        
+        # Metrics needed for COP calculation
+        COP_METRICS = ['CompressorPower', 'CondenserFanPower', 'CoolDemand']
+        
+        max_gap_seconds = max_gap_minutes * 60.0
+        
+        def _daily_energy_kwh_for_host_df(
+            host_df: "pd.DataFrame",
+            unit: str,
+            start_ts: "pd.Timestamp",
+            end_ts: "pd.Timestamp",
+        ) -> dict:
+            """
+            Compute daily energy (kWh) for a single hostname time series using trapezoidal integration,
+            splitting intervals that cross midnight (UTC) via linear interpolation.
+            """
+            if host_df is None or host_df.empty:
+                return {}
+
+            df = host_df.copy()
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+            df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+            if df.empty:
+                return {}
+
+            df["power_w"] = convert_power_series_to_watts(df["value"], unit)
+
+            # Clip to [start_ts, end_ts]
+            df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] <= end_ts)].copy()
+            if df.empty:
+                return {}
+
+            # Need at least 2 points for trapezoidal rule
+            if len(df) < 2:
+                return {}
+
+            out_j = {}
+            ts = df["timestamp"].to_list()
+            pw = df["power_w"].astype("float64").to_list()
+
+            for i in range(1, len(ts)):
+                t0 = ts[i - 1]
+                t1 = ts[i]
+                if t1 <= t0:
+                    continue
+                
+                # Check for large gaps
+                if (t1 - t0).total_seconds() > max_gap_seconds:
+                    # Treat large gaps as zero power consumption
+                    continue
+
+                p0 = float(pw[i - 1])
+                p1 = float(pw[i])
+
+                # Split at UTC midnights
+                cur_t = t0
+                cur_p = p0
+                next_midnight = (t0.normalize() + pd.Timedelta(days=1))
+                while next_midnight < t1:
+                    frac = (next_midnight - t0).total_seconds() / (t1 - t0).total_seconds()
+                    pb = p0 + (p1 - p0) * frac
+                    dt = (next_midnight - cur_t).total_seconds()
+                    e_j = ((cur_p + pb) / 2.0) * dt
+                    key = cur_t.date().isoformat()
+                    out_j[key] = out_j.get(key, 0.0) + e_j
+                    cur_t = next_midnight
+                    cur_p = pb
+                    next_midnight = next_midnight + pd.Timedelta(days=1)
+
+                # Last segment
+                dt = (t1 - cur_t).total_seconds()
+                e_j = ((cur_p + p1) / 2.0) * dt
+                key = cur_t.date().isoformat()
+                out_j[key] = out_j.get(key, 0.0) + e_j
+
+            # Joules -> kWh
+            return {k: float(v) / 3_600_000.0 for k, v in out_j.items()}
+        
+        try:
+            start_ts = pd.Timestamp(start_time, tz="UTC")
+            end_ts = pd.Timestamp(end_time, tz="UTC")
+            if end_ts <= start_ts:
+                return {"error": "end_time must be after start_time"}
+
+            start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+            end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+
+            # Build the full date index (UTC) we will report
+            all_dates = pd.date_range(start_ts.normalize(), end_ts.normalize(), freq="D", tz="UTC")
+            date_keys = [d.date().isoformat() for d in all_dates]
+
+            # Initialize daily data structure: {date: {rack: {metric: energy}}}
+            daily_data = {}
+            for date_key in date_keys:
+                daily_data[date_key] = {}
+                for rack_num in RACK_TO_IRC.keys():
+                    daily_data[date_key][rack_num] = {
+                        'compressor_power_kwh': 0.0,
+                        'condenser_fan_power_kwh': 0.0,
+                        'cool_demand_kwh': 0.0
+                    }
+
+            db_connection = get_raw_database_connection("infra", "public")
+            try:
+                engine = create_engine(
+                    f"postgresql://{db_connection.info.user}:{db_connection.info.password}@"
+                    f"{db_connection.info.host}:{db_connection.info.port}/{db_connection.info.dbname}"
+                )
+
+                # Query all metrics for all IRC nodes at once (batch query)
+                for metric in COP_METRICS:
+                    try:
+                        query = get_irc_metrics_with_joins(metric, hostname=None, start_time=start_time_str, end_time=end_time_str)
+                        df = pd.read_sql_query(query, engine)
+                        
+                        if not df.empty:
+                            unit = df['units'].iloc[0] if 'units' in df.columns else 'W'
+                            
+                            # Calculate daily energy for each IRC node (rack)
+                            for rack_num, irc_node in RACK_TO_IRC.items():
+                                node_df = df[df["hostname"] == irc_node].copy() if "hostname" in df.columns else None
+                                daily_energy = _daily_energy_kwh_for_host_df(node_df, unit, start_ts, end_ts)
+                                
+                                # Accumulate daily energy for this metric
+                                for date_key, energy_kwh in daily_energy.items():
+                                    if date_key in daily_data:
+                                        if metric == 'CompressorPower':
+                                            daily_data[date_key][rack_num]['compressor_power_kwh'] = energy_kwh
+                                        elif metric == 'CondenserFanPower':
+                                            daily_data[date_key][rack_num]['condenser_fan_power_kwh'] = energy_kwh
+                                        elif metric == 'CoolDemand':
+                                            daily_data[date_key][rack_num]['cool_demand_kwh'] = energy_kwh
+                    except Exception as e:
+                        logger.error(f"Error querying IRC metric {metric}: {e}", exc_info=True)
+                
+            finally:
+                if db_connection:
+                    db_connection.close()
+            
+            # Build DataFrame with all dates and racks
+            rows = []
+            for date_key in date_keys:
+                for rack_num in sorted(RACK_TO_IRC.keys()):
+                    rack_data = daily_data[date_key][rack_num]
+                    comp_power = rack_data['compressor_power_kwh']
+                    fan_power = rack_data['condenser_fan_power_kwh']
+                    cool_demand = rack_data['cool_demand_kwh']
+                    total_power = comp_power + fan_power
+                    
+                    # Calculate COP
+                    if total_power > 0:
+                        cop = cool_demand / total_power
+                    else:
+                        cop = None
+                    
+                    rows.append({
+                        'date': date_key,
+                        'rack': rack_num,
+                        'irc_node': RACK_TO_IRC[rack_num],
+                        'compressor_power_kwh': comp_power,
+                        'condenser_fan_power_kwh': fan_power,
+                        'cool_demand_kwh': cool_demand,
+                        'cop': cop
+                    })
+            
+            out_df = pd.DataFrame(rows)
+            return {
+                "time_range": {"start": start_time, "end": end_time},
+                "data": out_df,
+                "summary": {
+                    "days": len(date_keys),
+                    "racks": len(RACK_TO_IRC),
+                    "start_date": date_keys[0] if date_keys else None,
+                    "end_date": date_keys[-1] if date_keys else None,
+                },
+            }
+        except Exception as e:
+            logger.error(f"Error in calculate_rack_cop_daily: {e}", exc_info=True)
+            return {"error": str(e)}
+    
     def __del__(self):
         """Cleanup connections when service is destroyed"""
         try:

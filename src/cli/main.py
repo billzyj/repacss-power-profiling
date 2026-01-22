@@ -12,7 +12,7 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from .commands.analyze import analyze, energy, rack, pue
-from .commands.report import excel, rack_report, custom, pue_daily
+from .commands.report import excel, rack_report, custom, pue_daily, rack_cop, rack_cop_daily, pue_daily
 from .commands.test import connection, databases, config
 from .commands.visualize import visualize
 
@@ -37,6 +37,9 @@ cli.add_command(pue)
 cli.add_command(excel)
 cli.add_command(rack_report)
 cli.add_command(custom)
+cli.add_command(pue_daily)
+cli.add_command(rack_cop)
+cli.add_command(rack_cop_daily)
 cli.add_command(pue_daily)
 cli.add_command(connection)
 cli.add_command(databases)
