@@ -38,3 +38,24 @@ DERIVED_METRICS = [
     'computepower',              # Compute power that is not wasted
     'systemheadroominstantaneous'  # This is remaining wattage, not consumption
 ]
+
+# Raw metrics queried from DB. Pie: Total = In, PSU loss = In - Out,
+# Others = Total - (CPU+Memory+Storage+Fan+PSU_loss [+ GPU for H100]).
+H100_METRICS = [
+    'TotalCPUPower',
+    'TotalMemoryPower',
+    'TotalStoragePower',
+    'TotalFanPower',
+    'SystemInputPower',   # In = total power consumption
+    'SystemOutputPower',  # Out; PSU loss = In - Out
+    'PowerConsumption',   # mW GPU per FQDD; sum 4 FQDDs for pie
+]
+
+ZEN4_METRICS = [
+    'TotalCPUPower',
+    'TotalMemoryPower',
+    'TotalStoragePower',
+    'TotalFanPower',
+    'SystemInputPower',   # In = total power consumption
+    'SystemOutputPower',  # Out; PSU loss = In - Out
+]
