@@ -490,13 +490,13 @@ def main() -> None:
     if not out_dir.is_dir():
         print("Output directory not writable: %s" % out_dir, file=sys.stderr)
         sys.exit(1)
-    base_dir = out_dir / f"power-analysis-{job_id}"
-    base_dir.mkdir(parents=True, exist_ok=True)
+    # Write directly under out_dir (POWER_BASE) with job id prefix; no subdir.
+    prefix = f"{job_id}_"
+    csv_path = out_dir / f"{prefix}raw_power.csv"
+    ts_path = out_dir / f"{prefix}timeseries.png"
+    pie_path = out_dir / f"{prefix}energy_pie.png"
 
-    raw_df, pie_segments, energy_by_metric, energy_gpu_per_fqdd = run_job_power(start_time, end_time, nodelist, base_dir)
-    csv_path = base_dir / "raw_power.csv"
-    ts_path = base_dir / "timeseries.png"
-    pie_path = base_dir / "energy_pie.png"
+    raw_df, pie_segments, energy_by_metric, energy_gpu_per_fqdd = run_job_power(start_time, end_time, nodelist, out_dir)
 
     save_csv(
         raw_df,
@@ -509,14 +509,14 @@ def main() -> None:
     plot_time_series(raw_df, ts_path)
     plot_pie(pie_segments, pie_path)
 
-    base_abs = base_dir.resolve()
-    print(f"Saved: {base_abs}", file=sys.stderr)
-    print(f"  Files: raw_power.csv, timeseries.png, energy_pie.png, energy_pie.pdf", file=sys.stderr)
+    out_abs = out_dir.resolve()
+    print(f"Saved: {out_abs}", file=sys.stderr)
+    print(f"  Files: {prefix}raw_power.csv, {prefix}timeseries.png, {prefix}energy_pie.png, {prefix}energy_pie.pdf", file=sys.stderr)
     try:
-        rel = base_abs.relative_to(_REPO_ROOT)
+        rel = out_abs.relative_to(_REPO_ROOT)
         print(f"  (in repo: {rel})", file=sys.stderr)
     except (ValueError, AttributeError):
-        print(f"  Open folder: open \"{base_abs}\"", file=sys.stderr)
+        print(f"  Open folder: open \"{out_abs}\"", file=sys.stderr)
         print(f"  Tip: omit --outdir to save under repo output/tmp/ so you can find it in the project.", file=sys.stderr)
 
 

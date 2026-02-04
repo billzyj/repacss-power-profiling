@@ -41,8 +41,14 @@ fi
 if [[ ! -x "$PYTHON" ]]; then log "skip reason=python_not_executable path='$PYTHON'"; exit 0; fi
 if [[ ! -r "$SCRIPT" ]]; then log "skip reason=script_not_readable path='$SCRIPT'"; exit 0; fi
 
-OUTDIR="${POWER_BASE}/${JOB_ID}"
-dlog "output plan base='$POWER_BASE' outdir='$OUTDIR'"
+# Output: files directly under POWER_BASE with job id prefix (e.g. 12345_raw_power.csv)
+mkdir -p "$POWER_BASE" >>"$LOGFILE" 2>&1 || true
+dlog "output plan base='$POWER_BASE' (flat files with job_id prefix)"
+
+if [[ ! -d "$POWER_BASE" ]]; then
+  log "skip reason=power_base_create_failed power_base='$POWER_BASE'"
+  exit 0
+fi
 
 # Optional delay to let traces settle
 if [[ "${DELAY}" =~ ^[0-9]+$ ]] && [[ "${DELAY}" -gt 0 ]]; then
@@ -50,29 +56,21 @@ if [[ "${DELAY}" =~ ^[0-9]+$ ]] && [[ "${DELAY}" -gt 0 ]]; then
   sleep "$DELAY" || true
 fi
 
-# slurm can now write to /mnt/SHARED-AREA, so do not switch users
-mkdir -p "$OUTDIR" >>"$LOGFILE" 2>&1 || true
-
-if [[ ! -d "$OUTDIR" ]]; then
-  log "skip reason=outdir_create_failed outdir='$OUTDIR'"
-  exit 0
-fi
-
-# Helpful marker so users/admins can map job->user without per-user dirs
+# Helpful marker: POWER_BASE/{job_id}_meta.txt
 {
   echo "job_id=$JOB_ID"
   echo "user=$RUN_AS"
   echo "nodelist=${SLURM_JOB_NODELIST:-}"
   echo "timestamp=$(ts)"
-} > "${OUTDIR}/meta.txt" 2>/dev/null || true
+} > "${POWER_BASE}/${JOB_ID}_meta.txt" 2>/dev/null || true
 
-dlog "run start python='$PYTHON' script='$SCRIPT' outdir='$OUTDIR'"
+dlog "run start python='$PYTHON' script='$SCRIPT' outdir='$POWER_BASE'"
 
 env \
   MONSTER_POWER_JOB_ID="$JOB_ID" \
   MONSTER_POWER_NODELIST="${SLURM_JOB_NODELIST:-}" \
-  MONSTER_POWER_OUTDIR="$OUTDIR" \
+  MONSTER_POWER_OUTDIR="$POWER_BASE" \
   "$PYTHON" "$SCRIPT" >> "$LOGFILE" 2>&1 || true
 
-dlog "run end job_id=$JOB_ID outdir='$OUTDIR'"
+dlog "run end job_id=$JOB_ID power_base='$POWER_BASE'"
 exit 0
