@@ -5,6 +5,7 @@ Supports environment variables and improved security
 """
 
 import os
+import getpass
 from dataclasses import dataclass
 from typing import Optional, List
 from pathlib import Path
@@ -65,12 +66,28 @@ class Config:
         self.db_password = os.getenv('REPACSS_DB_PASSWORD', self.db_password or 'repacss')
         self.db_ssl_mode = os.getenv('REPACSS_DB_SSL_MODE', self.db_ssl_mode or 'prefer')
         
-        self.ssh_hostname = os.getenv('REPACSS_SSH_HOSTNAME', self.ssh_hostname or 'narumuu.ttu.edu')
-        self.ssh_port = int(os.getenv('REPACSS_SSH_PORT', self.ssh_port or 22))
-        self.ssh_username = os.getenv('REPACSS_SSH_USERNAME', self.ssh_username or 'yongzhao')
-        self.ssh_private_key_path = os.getenv('REPACSS_SSH_KEY_PATH', self.ssh_private_key_path or '/Users/billzyj/.ssh/yongjianmac')
-        self.ssh_passphrase = os.getenv('REPACSS_SSH_PASSPHRASE', self.ssh_passphrase or '')
-        self.ssh_keepalive_interval = int(os.getenv('REPACSS_SSH_KEEPALIVE', self.ssh_keepalive_interval or 60))
+        # Note: treat empty strings in .env as "unset" so users can rely on
+        # system ssh defaults (current username, ssh-agent, ~/.ssh/config).
+        ssh_hostname_env = os.getenv('REPACSS_SSH_HOSTNAME')
+        self.ssh_hostname = (ssh_hostname_env or "").strip() or (self.ssh_hostname or 'narumuu.ttu.edu')
+
+        ssh_port_env = os.getenv('REPACSS_SSH_PORT')
+        self.ssh_port = int((ssh_port_env or "").strip() or (self.ssh_port or 22))
+
+        ssh_username_env = os.getenv('REPACSS_SSH_USERNAME')
+        self.ssh_username = (ssh_username_env or "").strip() or (self.ssh_username or getpass.getuser())
+
+        ssh_key_env = os.getenv('REPACSS_SSH_KEY_PATH')
+        self.ssh_private_key_path = (ssh_key_env or "").strip() or (self.ssh_private_key_path or "")
+        # Normalize empty -> None to mean "use default keys/agent"
+        if not self.ssh_private_key_path:
+            self.ssh_private_key_path = None
+
+        ssh_passphrase_env = os.getenv('REPACSS_SSH_PASSPHRASE')
+        self.ssh_passphrase = (ssh_passphrase_env or "").strip() or (self.ssh_passphrase or '')
+
+        ssh_keepalive_env = os.getenv('REPACSS_SSH_KEEPALIVE')
+        self.ssh_keepalive_interval = int((ssh_keepalive_env or "").strip() or (self.ssh_keepalive_interval or 60))
         
         if self._database_schemas is None:
             self._database_schemas = {
@@ -145,10 +162,8 @@ class Config:
         # Check SSH settings
         if not self.ssh_hostname:
             issues.append("SSH hostname not configured")
-        if not self.ssh_username:
-            issues.append("SSH username not configured")
-        if not self.ssh_private_key_path:
-            issues.append("SSH private key path not configured")
+        # Username and key are optional: system ssh can use current user and
+        # default keys/ssh-agent based on ~/.ssh/config.
         
         # Check SSH key file
         if self.ssh_private_key_path and not Path(self.ssh_private_key_path).exists():

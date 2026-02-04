@@ -71,11 +71,30 @@ class REPACSSPowerClient:
             
             # Create SSH tunnel using subprocess
             ssh_cmd = [
-                'ssh', '-N', '-L', f'{local_port}:{self.db_config.host}:{self.db_config.port}',
-                '-i', self.ssh_config.private_key_path,
-                '-p', str(self.ssh_config.port),
-                f'{self.ssh_config.username}@{self.ssh_config.hostname}'
+                'ssh',
+                '-N',
+                '-L',
+                f'{local_port}:{self.db_config.host}:{self.db_config.port}',
+                '-p',
+                str(self.ssh_config.port),
+                # Fail fast if port-forward can't be established
+                '-o',
+                'ExitOnForwardFailure=yes',
+                # Keep the tunnel alive
+                '-o',
+                f'ServerAliveInterval={self.ssh_config.keepalive_interval}',
             ]
+
+            # Optional explicit identity file; if not set, rely on ssh-agent/default keys/ssh config.
+            if self.ssh_config.private_key_path:
+                ssh_cmd += ['-i', self.ssh_config.private_key_path]
+
+            destination = (
+                f'{self.ssh_config.username}@{self.ssh_config.hostname}'
+                if self.ssh_config.username
+                else self.ssh_config.hostname
+            )
+            ssh_cmd.append(destination)
             
             # Start the SSH tunnel process
             self.tunnel = subprocess.Popen(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
