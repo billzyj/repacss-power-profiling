@@ -175,8 +175,11 @@ class Config:
         """Check if configuration is valid"""
         return len(self.validate_config()) == 0
     
-    def load_from_env_file(self, env_file_path: str = 'src/database/config/.env'):
+    def load_from_env_file(self, env_file_path: str = None):
         """Load configuration from .env file"""
+        if env_file_path is None:
+            env_file_path = str(Path(__file__).resolve().parent / ".env")
+
         env_path = Path(env_file_path)
         if env_path.exists():
             with open(env_path, 'r') as f:
@@ -185,8 +188,7 @@ class Config:
                     if line and not line.startswith('#') and '=' in line:
                         key, value = line.split('=', 1)
                         os.environ[key.strip()] = value.strip()
-            
-            # Reinitialize with new environment variables
+
             self.__post_init__()
     
     def save_to_env_file(self, env_file_path: str = '.env'):
