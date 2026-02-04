@@ -1,88 +1,73 @@
 #!/bin/bash
 set -u
 
-# -------- config (from env, with safe defaults) --------
 LOGFILE="${MONSTER_POWER_LOGFILE:-/var/log/slurm/epilogslurmctld.log}"
 
 PYTHON="${MONSTER_POWER_PYTHON:-/opt/repacss-power-profiling/.venv/bin/python}"
 SCRIPT="${MONSTER_POWER_SCRIPT:-/opt/repacss-power-profiling/src/services/slurm_power_query.py}"
 DELAY="${MONSTER_POWER_DELAY_SECONDS:-10}"
 
-# Only allow EXACT comment match
 KEYWORD="power_profiling"
 
+# Shared output base (group-shared parent, per-user subdir created by user)
+POWER_BASE="${MONSTER_POWER_BASE:-/mnt/SHARED-AREA/power_reports/users}"
+
 ts() { date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S'; }
+log(){ printf "%s %s\n" "$(ts)" "$*" >> "$LOGFILE" 2>/dev/null || true; }
 
-log() {
-  # Never break Slurm epilog even if logging fails
-  printf "%s %s\n" "$(ts)" "$*" >> "$LOGFILE" 2>/dev/null || true
-}
-
-# -------- always log invocation first --------
 log "invoked job_id=${SLURM_JOB_ID:-} user=${SLURM_JOB_USER:-} nodes=${SLURM_JOB_NODELIST:-} stdout=${SLURM_JOB_STDOUT:-} stderr=${SLURM_JOB_STDERR:-} comment_env=${SLURM_JOB_COMMENT:-<unset>}"
 
 JOB_ID="${SLURM_JOB_ID:-}"
-if [[ -z "$JOB_ID" ]]; then
-  log "skip reason=no_SLURM_JOB_ID"
-  exit 0
-fi
+RUN_AS="${SLURM_JOB_USER:-}"
 
-# -------- fetch comment reliably from slurmctld --------
-# Use scontrol because SLURM_JOB_COMMENT may be unset for EpilogSlurmctld
+if [[ -z "$JOB_ID" ]]; then log "skip reason=no_SLURM_JOB_ID"; exit 0; fi
+if [[ -z "$RUN_AS" ]]; then log "skip reason=no_SLURM_JOB_USER"; exit 0; fi
+
+# Fetch comment reliably from ctld
 COMMENT="$(scontrol show job -o "$JOB_ID" 2>/dev/null | sed -n 's/.*Comment=\([^ ]*\).*/\1/p')"
 COMMENT="${COMMENT:-}"
-
 log "job_id=$JOB_ID comment_scontrol=${COMMENT:-<empty>} keyword=$KEYWORD"
 
-# Only run if comment EXACTLY equals keyword
 if [[ "$COMMENT" != "$KEYWORD" ]]; then
   log "skip reason=comment_mismatch comment='$COMMENT'"
   exit 0
 fi
 
-# -------- validate required env --------
-if [[ -z "${SCRIPT}" ]]; then
-  log "skip reason=MONSTER_POWER_SCRIPT_empty"
-  exit 0
-fi
-if [[ ! -r "${SCRIPT}" ]]; then
-  log "skip reason=script_not_readable path='$SCRIPT'"
-  exit 0
-fi
-if [[ ! -x "${PYTHON}" ]]; then
-  log "skip reason=python_not_executable path='$PYTHON'"
-  exit 0
-fi
+# Validate python + script (slurm reads these locally on headnode)
+if [[ ! -x "$PYTHON" ]]; then log "skip reason=python_not_executable path='$PYTHON'"; exit 0; fi
+if [[ ! -r "$SCRIPT" ]]; then log "skip reason=script_not_readable path='$SCRIPT'"; exit 0; fi
 
-# -------- decide output directory --------
-OUTDIR="$(dirname -- "${SLURM_JOB_STDOUT:-/tmp/slurm-%j.out}")"
-if [[ ! -d "${OUTDIR}" ]]; then
-  log "skip reason=outdir_missing outdir='$OUTDIR' stdout='${SLURM_JOB_STDOUT:-}'"
-  exit 0
-fi
+# Decide output directory on shared area (do NOT depend on user's workdir/stdout path)
+USER_DIR="${POWER_BASE}/${RUN_AS}"
+OUTDIR="${USER_DIR}/${JOB_ID}"
 
-# -------- optional delay --------
+log "output plan base='$POWER_BASE' user_dir='$USER_DIR' outdir='$OUTDIR'"
+
+# Optional delay to wait DB traces settle
 if [[ "${DELAY}" =~ ^[0-9]+$ ]] && [[ "${DELAY}" -gt 0 ]]; then
   log "delay seconds=$DELAY"
   sleep "$DELAY" || true
 fi
 
-# -------- run as job user to write into job output dir --------
-RUN_AS="${SLURM_JOB_USER:-}"
-if [[ -z "$RUN_AS" ]]; then
-  log "skip reason=no_SLURM_JOB_USER"
+# Create dirs as job user (avoids slurm needing NFS write; avoids UID mapping issues for slurm)
+runuser -u "$RUN_AS" -- mkdir -p "$OUTDIR" >>"$LOGFILE" 2>&1 || true
+
+# Lock down perms if you want (optional):
+# runuser -u "$RUN_AS" -- chmod 700 "$USER_DIR" "$OUTDIR" >>"$LOGFILE" 2>&1 || true
+
+# Verify as user
+if ! runuser -u "$RUN_AS" -- test -d "$OUTDIR" >>"$LOGFILE" 2>&1 ; then
+  log "skip reason=outdir_unusable_for_user user=$RUN_AS outdir='$OUTDIR'"
   exit 0
 fi
 
 log "run start user=$RUN_AS python='$PYTHON' script='$SCRIPT' outdir='$OUTDIR'"
 
-# Capture both stdout/stderr into the same logfile for debugging
 runuser -u "$RUN_AS" -- \
   env \
     MONSTER_POWER_JOB_ID="$JOB_ID" \
     MONSTER_POWER_NODELIST="${SLURM_JOB_NODELIST:-}" \
     MONSTER_POWER_OUTDIR="$OUTDIR" \
-    MONSTER_POWER_LOGFILE="$LOGFILE" \
     "$PYTHON" "$SCRIPT" >> "$LOGFILE" 2>&1 || true
 
 log "run end job_id=$JOB_ID"
