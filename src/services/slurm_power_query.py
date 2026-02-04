@@ -273,14 +273,14 @@ def save_csv(
     pie_segments: Optional[Dict[str, float]] = None,
     energy_gpu_per_fqdd: Optional[Dict[str, float]] = None,
     is_h100: bool = False,
-) -> None:
-    """Save raw data to CSV; optionally append energy summary rows below (for pie chart)."""
+) -> bool:
+    """Save raw data to CSV; optionally append energy summary rows below (for pie chart). Returns True if file was written."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if raw_df.empty:
-        return
+        return False
     raw_df.to_csv(path, index=False, date_format="%Y-%m-%d %H:%M:%S")
     if energy_by_metric is None or pie_segments is None:
-        return
+        return True
     summary = _energy_summary_rows(
         energy_by_metric,
         pie_segments,
@@ -289,16 +289,17 @@ def save_csv(
         list(raw_df.columns),
     )
     if summary.empty:
-        return
+        return True
     with path.open("a", encoding="utf-8") as f:
         f.write("\n")
     summary.to_csv(path, mode="a", header=False, index=False)
+    return True
 
 
-def plot_time_series(raw_df: pd.DataFrame, path: Path) -> None:
-    """Plot power (W) vs time per metric; save figure. Font/style aligned with pie chart."""
+def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
+    """Plot power (W) vs time per metric; save figure. Font/style aligned with pie chart. Returns True if file was written."""
     if raw_df.empty or "timestamp" not in raw_df.columns or "value" not in raw_df.columns:
-        return
+        return False
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -306,13 +307,13 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> None:
         import matplotlib.dates as mdates
         from utils.plot_style import apply_paper_style
     except ImportError:
-        return
+        return False
     apply_paper_style()
     df = raw_df.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
     df = df.dropna(subset=["timestamp"])
     if df.empty:
-        return
+        return False
     fig, ax = plt.subplots(figsize=(10, 5))
     for metric in df["metric"].unique():
         sub_all = df[df["metric"] == metric]
@@ -343,12 +344,13 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+    return True
 
 
-def plot_pie(pie_segments: Dict[str, float], path: Path) -> None:
-    """Plot pie chart: Zen4 = CPU, Memory, Storage, Fan, PSU loss, Others; H100 + GPU."""
+def plot_pie(pie_segments: Dict[str, float], path: Path) -> bool:
+    """Plot pie chart: Zen4 = CPU, Memory, Storage, Fan, PSU loss, Others; H100 + GPU. Returns True if file was written."""
     if not pie_segments or sum(pie_segments.values()) == 0:
-        return
+        return False
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -360,7 +362,7 @@ def plot_pie(pie_segments: Dict[str, float], path: Path) -> None:
             set_pie_text_color,
         )
     except ImportError:
-        return
+        return False
     apply_paper_style()
     # pie_segments keys are display labels (CPU, Memory, Storage, Fan, PSU loss, Others, [GPU])
     display_labels = list(pie_segments.keys())
@@ -412,6 +414,7 @@ def plot_pie(pie_segments: Dict[str, float], path: Path) -> None:
     pdf_path = path.with_suffix(".pdf")
     fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
+    return True
 
 
 def parse_cli_test_args() -> Optional[Tuple[Dict[str, Any], str]]:
@@ -498,7 +501,7 @@ def main() -> None:
 
     raw_df, pie_segments, energy_by_metric, energy_gpu_per_fqdd = run_job_power(start_time, end_time, nodelist, out_dir)
 
-    save_csv(
+    wrote_csv = save_csv(
         raw_df,
         csv_path,
         energy_by_metric=energy_by_metric,
@@ -506,18 +509,25 @@ def main() -> None:
         energy_gpu_per_fqdd=energy_gpu_per_fqdd,
         is_h100=any(n.lower().startswith("rpg") for n in nodelist),
     )
-    plot_time_series(raw_df, ts_path)
-    plot_pie(pie_segments, pie_path)
+    wrote_ts = plot_time_series(raw_df, ts_path)
+    wrote_pie = plot_pie(pie_segments, pie_path)
 
     out_abs = out_dir.resolve()
-    print(f"Saved: {out_abs}", file=sys.stderr)
-    print(f"  Files: {prefix}raw_power.csv, {prefix}timeseries.png, {prefix}energy_pie.png, {prefix}energy_pie.pdf", file=sys.stderr)
-    try:
-        rel = out_abs.relative_to(_REPO_ROOT)
-        print(f"  (in repo: {rel})", file=sys.stderr)
-    except (ValueError, AttributeError):
-        print(f"  Open folder: open \"{out_abs}\"", file=sys.stderr)
-        print(f"  Tip: omit --outdir to save under repo output/tmp/ so you can find it in the project.", file=sys.stderr)
+    if wrote_csv or wrote_ts or wrote_pie:
+        written = [f"{prefix}raw_power.csv"] if wrote_csv else []
+        if wrote_ts:
+            written.append(f"{prefix}timeseries.png")
+        if wrote_pie:
+            written.extend([f"{prefix}energy_pie.png", f"{prefix}energy_pie.pdf"])
+        print(f"Saved: {out_abs}", file=sys.stderr)
+        print(f"  Files: {', '.join(written)}", file=sys.stderr)
+        try:
+            rel = out_abs.relative_to(_REPO_ROOT)
+            print(f"  (in repo: {rel})", file=sys.stderr)
+        except (ValueError, AttributeError):
+            print(f"  Open folder: open \"{out_abs}\"", file=sys.stderr)
+    else:
+        print(f"No power data for job {job_id} (time range / nodelist): no CSV or plots written. Output dir: {out_abs}", file=sys.stderr)
 
 
 if __name__ == "__main__":
