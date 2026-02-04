@@ -8,67 +8,69 @@ SCRIPT="${MONSTER_POWER_SCRIPT:-/opt/repacss-power-profiling/src/services/slurm_
 DELAY="${MONSTER_POWER_DELAY_SECONDS:-10}"
 
 KEYWORD="power_profiling"
-
-# Shared output base (group-shared parent, per-user subdir created by user)
 POWER_BASE="${MONSTER_POWER_BASE:-/mnt/SHARED-AREA/power_reports/users}"
+
+RUNUSER="/usr/sbin/runuser"
+DEBUG="${MONSTER_POWER_DEBUG:-0}"   # set to 1 to enable verbose logs
 
 ts() { date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S'; }
 log(){ printf "%s %s\n" "$(ts)" "$*" >> "$LOGFILE" 2>/dev/null || true; }
-
-log "invoked job_id=${SLURM_JOB_ID:-} user=${SLURM_JOB_USER:-} nodes=${SLURM_JOB_NODELIST:-} stdout=${SLURM_JOB_STDOUT:-} stderr=${SLURM_JOB_STDERR:-} comment_env=${SLURM_JOB_COMMENT:-<unset>}"
+dlog(){ [[ "$DEBUG" == "1" ]] && log "$@"; }
 
 JOB_ID="${SLURM_JOB_ID:-}"
 RUN_AS="${SLURM_JOB_USER:-}"
 
+# Minimal sanity checks
 if [[ -z "$JOB_ID" ]]; then log "skip reason=no_SLURM_JOB_ID"; exit 0; fi
 if [[ -z "$RUN_AS" ]]; then log "skip reason=no_SLURM_JOB_USER"; exit 0; fi
+if [[ ! -x "$RUNUSER" ]]; then log "skip reason=runuser_not_found path='$RUNUSER'"; exit 0; fi
+
+dlog "invoked job_id=$JOB_ID user=$RUN_AS nodes=${SLURM_JOB_NODELIST:-} stdout=${SLURM_JOB_STDOUT:-} stderr=${SLURM_JOB_STDERR:-} comment_env=${SLURM_JOB_COMMENT:-<unset>}"
 
 # Fetch comment reliably from ctld
 COMMENT="$(scontrol show job -o "$JOB_ID" 2>/dev/null | sed -n 's/.*Comment=\([^ ]*\).*/\1/p')"
 COMMENT="${COMMENT:-}"
-log "job_id=$JOB_ID comment_scontrol=${COMMENT:-<empty>} keyword=$KEYWORD"
+dlog "job_id=$JOB_ID comment_scontrol=${COMMENT:-<empty>} keyword=$KEYWORD"
 
+# Gate by comment (exact match)
 if [[ "$COMMENT" != "$KEYWORD" ]]; then
-  log "skip reason=comment_mismatch comment='$COMMENT'"
+  dlog "skip reason=comment_mismatch comment='$COMMENT'"
   exit 0
 fi
 
-# Validate python + script (slurm reads these locally on headnode)
+# Validate python + script (local on headnode)
 if [[ ! -x "$PYTHON" ]]; then log "skip reason=python_not_executable path='$PYTHON'"; exit 0; fi
 if [[ ! -r "$SCRIPT" ]]; then log "skip reason=script_not_readable path='$SCRIPT'"; exit 0; fi
 
-# Decide output directory on shared area (do NOT depend on user's workdir/stdout path)
+# Output directory (shared area)
 USER_DIR="${POWER_BASE}/${RUN_AS}"
 OUTDIR="${USER_DIR}/${JOB_ID}"
 
-log "output plan base='$POWER_BASE' user_dir='$USER_DIR' outdir='$OUTDIR'"
+dlog "output plan base='$POWER_BASE' user_dir='$USER_DIR' outdir='$OUTDIR'"
 
-# Optional delay to wait DB traces settle
+# Optional delay
 if [[ "${DELAY}" =~ ^[0-9]+$ ]] && [[ "${DELAY}" -gt 0 ]]; then
-  log "delay seconds=$DELAY"
+  dlog "delay seconds=$DELAY"
   sleep "$DELAY" || true
 fi
 
-# Create dirs as job user (avoids slurm needing NFS write; avoids UID mapping issues for slurm)
-runuser -u "$RUN_AS" -- mkdir -p "$OUTDIR" >>"$LOGFILE" 2>&1 || true
-
-# Lock down perms if you want (optional):
-# runuser -u "$RUN_AS" -- chmod 700 "$USER_DIR" "$OUTDIR" >>"$LOGFILE" 2>&1 || true
+# Create dirs as job user (avoids slurm needing NFS write)
+"$RUNUSER" -u "$RUN_AS" -- mkdir -p "$OUTDIR" >>"$LOGFILE" 2>&1 || true
 
 # Verify as user
-if ! runuser -u "$RUN_AS" -- test -d "$OUTDIR" >>"$LOGFILE" 2>&1 ; then
+if ! "$RUNUSER" -u "$RUN_AS" -- test -d "$OUTDIR" >>"$LOGFILE" 2>&1 ; then
   log "skip reason=outdir_unusable_for_user user=$RUN_AS outdir='$OUTDIR'"
   exit 0
 fi
 
-log "run start user=$RUN_AS python='$PYTHON' script='$SCRIPT' outdir='$OUTDIR'"
+dlog "run start user=$RUN_AS python='$PYTHON' script='$SCRIPT' outdir='$OUTDIR'"
 
-runuser -u "$RUN_AS" -- \
+"$RUNUSER" -u "$RUN_AS" -- \
   env \
     MONSTER_POWER_JOB_ID="$JOB_ID" \
     MONSTER_POWER_NODELIST="${SLURM_JOB_NODELIST:-}" \
     MONSTER_POWER_OUTDIR="$OUTDIR" \
     "$PYTHON" "$SCRIPT" >> "$LOGFILE" 2>&1 || true
 
-log "run end job_id=$JOB_ID"
+dlog "run end job_id=$JOB_ID"
 exit 0
