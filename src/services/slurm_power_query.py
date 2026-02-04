@@ -78,8 +78,9 @@ def parse_epilog_env() -> Optional[Dict[str, Any]]:
     if not start_raw or not end_raw or not nodelist_raw:
         return None
     try:
-        start_ts = datetime.fromtimestamp(int(start_raw), tz=timezone.utc).replace(tzinfo=None)
-        end_ts = datetime.fromtimestamp(int(end_raw), tz=timezone.utc).replace(tzinfo=None)
+        # Local time so query window matches DB when DB stores local time
+        start_ts = datetime.fromtimestamp(int(start_raw))
+        end_ts = datetime.fromtimestamp(int(end_raw))
     except (TypeError, ValueError):
         return None
     nodes = expand_nodelist(nodelist_raw)
@@ -450,8 +451,9 @@ def parse_cli_test_args() -> Optional[Tuple[Dict[str, Any], str]]:
     if not nodes:
         return None
     try:
-        start_ts = datetime.fromtimestamp(args.start, tz=timezone.utc).replace(tzinfo=None)
-        end_ts = datetime.fromtimestamp(args.end, tz=timezone.utc).replace(tzinfo=None)
+        # Local time so query strings match DB when DB stores local time
+        start_ts = datetime.fromtimestamp(args.start)
+        end_ts = datetime.fromtimestamp(args.end)
     except (TypeError, ValueError):
         return None
     info = {
