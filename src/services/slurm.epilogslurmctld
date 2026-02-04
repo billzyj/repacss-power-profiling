@@ -8,7 +8,9 @@ SCRIPT="${MONSTER_POWER_SCRIPT:-/opt/repacss-power-profiling/src/services/slurm_
 DELAY="${MONSTER_POWER_DELAY_SECONDS:-10}"
 
 KEYWORD="power_profiling"
-POWER_BASE="${MONSTER_POWER_BASE:-/mnt/SHARED-AREA/power_reports/users}"
+
+# Flat output base (all jobs under one dir)
+POWER_BASE="${MONSTER_POWER_BASE:-/mnt/SHARED-AREA/power_reports}"
 
 DEBUG="${MONSTER_POWER_DEBUG:-0}"   # set to 1 to enable verbose logs
 
@@ -24,22 +26,25 @@ if [[ -z "$RUN_AS" ]]; then log "skip reason=no_SLURM_JOB_USER"; exit 0; fi
 
 dlog "invoked job_id=$JOB_ID user=$RUN_AS nodes=${SLURM_JOB_NODELIST:-} stdout=${SLURM_JOB_STDOUT:-} stderr=${SLURM_JOB_STDERR:-} comment_env=${SLURM_JOB_COMMENT:-<unset>}"
 
+# Fetch comment reliably from ctld
 COMMENT="$(scontrol show job -o "$JOB_ID" 2>/dev/null | sed -n 's/.*Comment=\([^ ]*\).*/\1/p')"
 COMMENT="${COMMENT:-}"
 dlog "job_id=$JOB_ID comment_scontrol=${COMMENT:-<empty>} keyword=$KEYWORD"
 
+# Gate by comment (exact match)
 if [[ "$COMMENT" != "$KEYWORD" ]]; then
   dlog "skip reason=comment_mismatch comment='$COMMENT'"
   exit 0
 fi
 
+# Validate python + script (local on headnode)
 if [[ ! -x "$PYTHON" ]]; then log "skip reason=python_not_executable path='$PYTHON'"; exit 0; fi
 if [[ ! -r "$SCRIPT" ]]; then log "skip reason=script_not_readable path='$SCRIPT'"; exit 0; fi
 
-USER_DIR="${POWER_BASE}/${RUN_AS}"
-OUTDIR="${USER_DIR}/${JOB_ID}"
-dlog "output plan base='$POWER_BASE' user_dir='$USER_DIR' outdir='$OUTDIR'"
+OUTDIR="${POWER_BASE}/${JOB_ID}"
+dlog "output plan base='$POWER_BASE' outdir='$OUTDIR'"
 
+# Optional delay to let traces settle
 if [[ "${DELAY}" =~ ^[0-9]+$ ]] && [[ "${DELAY}" -gt 0 ]]; then
   dlog "delay seconds=$DELAY"
   sleep "$DELAY" || true
@@ -53,6 +58,14 @@ if [[ ! -d "$OUTDIR" ]]; then
   exit 0
 fi
 
+# Helpful marker so users/admins can map job->user without per-user dirs
+{
+  echo "job_id=$JOB_ID"
+  echo "user=$RUN_AS"
+  echo "nodelist=${SLURM_JOB_NODELIST:-}"
+  echo "timestamp=$(ts)"
+} > "${OUTDIR}/meta.txt" 2>/dev/null || true
+
 dlog "run start python='$PYTHON' script='$SCRIPT' outdir='$OUTDIR'"
 
 env \
@@ -61,5 +74,5 @@ env \
   MONSTER_POWER_OUTDIR="$OUTDIR" \
   "$PYTHON" "$SCRIPT" >> "$LOGFILE" 2>&1 || true
 
-dlog "run end job_id=$JOB_ID"
+dlog "run end job_id=$JOB_ID outdir='$OUTDIR'"
 exit 0
