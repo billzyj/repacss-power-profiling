@@ -11,7 +11,8 @@ DB for node power, save raw CSV, plot time series and energy pie chart.
 import argparse
 import os
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,6 +35,15 @@ from constants.metrics import ZEN4_METRICS, H100_METRICS
 from database.database import get_raw_database_connection
 from queries.compute.idrac import get_compute_metrics_with_joins
 from utils.conversions import convert_power_series_to_watts
+
+
+def _format_local_ts_with_offset(dt: datetime) -> str:
+    """Format naive local datetime as 'YYYY-MM-DD HH:MM:SS±HH' for PostgreSQL timestamptz / DB that stores local-with-offset."""
+    ts = dt.timestamp()
+    struct = time.localtime(ts)
+    offset_sec = -time.altzone if (time.daylight and struct.tm_isdst) else -time.timezone
+    offset_hours = int(offset_sec // 3600)
+    return dt.strftime("%Y-%m-%d %H:%M:%S") + f"{offset_hours:+03d}"
 
 
 def expand_nodelist(nodelist: str) -> List[str]:
@@ -150,8 +160,9 @@ def run_job_power(
     Compute total energy per metric and per-FQDD GPU energy.
     Return (raw_df, pie_segments, energy_by_metric, energy_gpu_per_fqdd).
     """
-    start_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
-    end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+    # Format as local time with offset (e.g. 2025-10-14 22:00:00-05) so DB timestamptz comparison matches
+    start_str = _format_local_ts_with_offset(start_time)
+    end_str = _format_local_ts_with_offset(end_time)
     all_dfs: List[pd.DataFrame] = []
     energy_by_metric: Dict[str, float] = {}
     energy_gpu_per_fqdd: Dict[str, float] = {}
