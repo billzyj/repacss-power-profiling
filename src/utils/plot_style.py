@@ -31,10 +31,10 @@ METRIC_ID_TO_DISPLAY: Dict[str, str] = {
 
 
 def apply_paper_style() -> None:
-    """Set matplotlib rc for paper figures (font, weight)."""
+    """Set matplotlib rc for paper figures (font, weight). Use DejaVu Sans first for head nodes without extra fonts."""
     import matplotlib
     matplotlib.rcParams["font.family"] = "sans-serif"
-    matplotlib.rcParams["font.sans-serif"] = ["Palatino Linotype", "DejaVu Sans", "sans-serif"]
+    matplotlib.rcParams["font.sans-serif"] = ["DejaVu Sans", "Liberation Sans", "sans-serif"]
     matplotlib.rcParams["font.weight"] = "bold"
 
 

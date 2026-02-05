@@ -69,10 +69,15 @@ fi
 
 dlog "run start python='$PYTHON' script='$SCRIPT' outdir='$OUTDIR'"
 
+# Matplotlib: writable cache dir (avoids /etc/slurm/.config/matplotlib) and no broken font paths
+export MPLCONFIGDIR="${MONSTER_POWER_MPLCONFIGDIR:-/tmp/mplconfig-slurm}"
+mkdir -p "$MPLCONFIGDIR" >>"$LOGFILE" 2>&1 || true
+
 env \
   MONSTER_POWER_JOB_ID="$JOB_ID" \
   MONSTER_POWER_NODELIST="${SLURM_JOB_NODELIST:-}" \
   MONSTER_POWER_OUTDIR="$OUTDIR" \
+  MPLCONFIGDIR="$MPLCONFIGDIR" \
   "$PYTHON" "$SCRIPT" >> "$LOGFILE" 2>&1 || true
 
 dlog "run end job_id=$JOB_ID outdir='$OUTDIR'"
