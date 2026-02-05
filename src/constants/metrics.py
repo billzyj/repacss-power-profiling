@@ -48,7 +48,7 @@ H100_METRICS = [
     'TotalFanPower',
     'SystemInputPower',   # In = total power consumption
     'SystemOutputPower',  # Out; PSU loss = In - Out
-    'PowerConsumption',   # mW GPU per FQDD; sum 4 FQDDs for pie
+    'PowerConsumption',   # mW GPU per FQDD; sum 4 FQDDs for ring chart
 ]
 
 ZEN4_METRICS = [
