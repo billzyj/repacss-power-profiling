@@ -9,7 +9,7 @@ DELAY="${MONSTER_POWER_DELAY_SECONDS:-10}"
 
 KEYWORD="power_profiling"
 
-# Flat output base (all jobs under one dir)
+# Output layout: POWER_BASE/{userid}/{job_id}/
 POWER_BASE="${MONSTER_POWER_BASE:-/mnt/SHARED-AREA/power_reports}"
 
 DEBUG="${MONSTER_POWER_DEBUG:-0}"   # set to 1 to enable verbose logs
@@ -41,12 +41,13 @@ fi
 if [[ ! -x "$PYTHON" ]]; then log "skip reason=python_not_executable path='$PYTHON'"; exit 0; fi
 if [[ ! -r "$SCRIPT" ]]; then log "skip reason=script_not_readable path='$SCRIPT'"; exit 0; fi
 
-# Output: files directly under POWER_BASE with job id prefix (e.g. 12345_raw_power.csv)
-mkdir -p "$POWER_BASE" >>"$LOGFILE" 2>&1 || true
-dlog "output plan base='$POWER_BASE' (flat files with job_id prefix)"
+# Output: POWER_BASE/{userid}/{job_id}/ (raw_power.csv, power_timeseries.pdf, energy_ring.pdf, meta.txt)
+OUTDIR="${POWER_BASE}/${RUN_AS}/${JOB_ID}"
+mkdir -p "$OUTDIR" >>"$LOGFILE" 2>&1 || true
+dlog "output plan outdir='$OUTDIR'"
 
-if [[ ! -d "$POWER_BASE" ]]; then
-  log "skip reason=power_base_create_failed power_base='$POWER_BASE'"
+if [[ ! -d "$OUTDIR" ]]; then
+  log "skip reason=outdir_create_failed outdir='$OUTDIR'"
   exit 0
 fi
 
@@ -56,21 +57,23 @@ if [[ "${DELAY}" =~ ^[0-9]+$ ]] && [[ "${DELAY}" -gt 0 ]]; then
   sleep "$DELAY" || true
 fi
 
-# Helpful marker: POWER_BASE/{job_id}_meta.txt
+# Helpful marker: OUTDIR/meta.txt
 {
   echo "job_id=$JOB_ID"
   echo "user=$RUN_AS"
   echo "nodelist=${SLURM_JOB_NODELIST:-}"
+  echo "start_time=${SLURM_JOB_START_TIME:-}"
+  echo "end_time=${SLURM_JOB_END_TIME:-}"
   echo "timestamp=$(ts)"
-} > "${POWER_BASE}/${JOB_ID}_meta.txt" 2>/dev/null || true
+} > "${OUTDIR}/meta.txt" 2>/dev/null || true
 
-dlog "run start python='$PYTHON' script='$SCRIPT' outdir='$POWER_BASE'"
+dlog "run start python='$PYTHON' script='$SCRIPT' outdir='$OUTDIR'"
 
 env \
   MONSTER_POWER_JOB_ID="$JOB_ID" \
   MONSTER_POWER_NODELIST="${SLURM_JOB_NODELIST:-}" \
-  MONSTER_POWER_OUTDIR="$POWER_BASE" \
+  MONSTER_POWER_OUTDIR="$OUTDIR" \
   "$PYTHON" "$SCRIPT" >> "$LOGFILE" 2>&1 || true
 
-dlog "run end job_id=$JOB_ID power_base='$POWER_BASE'"
+dlog "run end job_id=$JOB_ID outdir='$OUTDIR'"
 exit 0

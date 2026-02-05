@@ -447,8 +447,9 @@ def plot_pie(
         framealpha=0.95,
         edgecolor="gray",
         fancybox=True,
+        bbox_to_anchor=(0.5, 0.22),
     )
-    plt.tight_layout(rect=[0, 0.12, 1, 0.98])
+    plt.tight_layout(rect=[0, 0.18, 1, 0.94])
     path.parent.mkdir(parents=True, exist_ok=True)
     # Ring chart: PDF only
     fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -533,11 +534,10 @@ def main() -> None:
     if not out_dir.is_dir():
         print("Output directory not writable: %s" % out_dir, file=sys.stderr)
         sys.exit(1)
-    # Write directly under out_dir (POWER_BASE) with job id prefix; no subdir.
-    prefix = f"{job_id}_"
-    csv_path = out_dir / f"{prefix}raw_power.csv"
-    ts_path = out_dir / f"{prefix}timeseries.png"
-    pie_path = out_dir / f"{prefix}energy_pie.pdf"
+    # out_dir is POWER_BASE/{userid}/{job_id}/ when run from epilog; write fixed filenames under it.
+    csv_path = out_dir / "raw_power.csv"
+    ts_path = out_dir / "power_timeseries.pdf"
+    pie_path = out_dir / "energy_ring.pdf"
 
     raw_df, pie_segments, energy_by_metric, energy_gpu_per_fqdd = run_job_power(start_time, end_time, nodelist, out_dir)
 
@@ -554,11 +554,11 @@ def main() -> None:
 
     out_abs = out_dir.resolve()
     if wrote_csv or wrote_ts or wrote_pie:
-        written = [f"{prefix}raw_power.csv"] if wrote_csv else []
+        written = ["raw_power.csv"] if wrote_csv else []
         if wrote_ts:
-            written.append(f"{prefix}timeseries.png")
+            written.append("power_timeseries.pdf")
         if wrote_pie:
-            written.append(f"{prefix}energy_pie.pdf")
+            written.append("energy_ring.pdf")
         print(f"Saved: {out_abs}", file=sys.stderr)
         print(f"  Files: {', '.join(written)}", file=sys.stderr)
         try:

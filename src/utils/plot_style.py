@@ -106,7 +106,7 @@ def create_ring_with_smart_labels(
             f"{center_title}\n{center_value}".strip(),
             ha="center", va="center", fontsize=14, weight="bold",
         )
-    ax.set_title(title, fontsize=13, weight="bold", pad=5)
+    ax.set_title(title, fontsize=13, weight="bold", pad=2)
     return wedges, texts, autotexts
 
 
