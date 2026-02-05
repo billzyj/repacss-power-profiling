@@ -472,7 +472,7 @@ def parse_cli_test_args() -> Optional[Tuple[Dict[str, Any], str]]:
     parser = argparse.ArgumentParser(
         description="Slurm job power query (epilog env or test: --start/--end/--nodelist [--outdir])."
     )
-    parser.add_argument("job_id", nargs="?", help="Job ID (default: test).")
+    parser.add_argument("job_id", nargs="?", help="Job ID for ring chart center (default: test).")
     parser.add_argument("--start", type=int, help="Start time (Unix timestamp).")
     parser.add_argument("--end", type=int, help="End time (Unix timestamp).")
     parser.add_argument("--nodelist", type=str, help="Node list (e.g. rpc-97-16).")
@@ -522,9 +522,9 @@ def main() -> None:
             parser.parse_args()
             print(
                 "Run under EpilogSlurmctld (SLURM_JOB_* env) or test mode:\n"
-                "  python -m src.services.slurm_power_query --start 1769805600 --end 1769806280 "
-                "--nodelist rpc-97-16\n"
-                "  (output defaults to output/tmp)",
+                "  python -m src.services.slurm_power_query [job_id] --start 1769805600 --end 1769806280 "
+                "--nodelist rpc-97-16 [--outdir output/tmp]\n"
+                "  job_id optional; used for ring chart center (default: test).",
                 file=sys.stderr,
             )
             sys.exit(1)

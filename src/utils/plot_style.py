@@ -33,8 +33,8 @@ METRIC_ID_TO_DISPLAY: Dict[str, str] = {
     "TotalStoragePower": "Storage",
     "TotalFanPower": "Fan",
     "PowerConsumption": "GPU",
-    "SystemInputPower": "Input",
-    "SystemOutputPower": "Output",
+    "SystemInputPower": "SystemInput",
+    "SystemOutputPower": "SystemOutput",
 }
 
 
