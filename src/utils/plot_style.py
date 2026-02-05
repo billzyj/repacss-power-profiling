@@ -18,6 +18,14 @@ POWER_DISTRIBUTION_COLORS: Dict[str, str] = {
     "Output": "#7f8c8d",
 }
 
+# Four green-shade colors for GPU FQDDs (time series: one per GPU slot, distinguishable)
+GPU_FQDD_COLORS: List[str] = [
+    "#2d6a2d",  # dark green
+    "#83af40",  # main GPU green
+    "#9bc958",  # light green
+    "#c5e89c",  # pale green
+]
+
 # Metric ID from DB -> display label for pie
 METRIC_ID_TO_DISPLAY: Dict[str, str] = {
     "TotalCPUPower": "CPU",
@@ -31,10 +39,10 @@ METRIC_ID_TO_DISPLAY: Dict[str, str] = {
 
 
 def apply_paper_style() -> None:
-    """Set matplotlib rc for paper figures (font, weight). Use DejaVu Sans first for head nodes without extra fonts."""
+    """Set matplotlib rc for paper figures (font, weight). Prefer Palatino Linotype, fallback to DejaVu Sans etc."""
     import matplotlib
     matplotlib.rcParams["font.family"] = "sans-serif"
-    matplotlib.rcParams["font.sans-serif"] = ["DejaVu Sans", "Liberation Sans", "sans-serif"]
+    matplotlib.rcParams["font.sans-serif"] = ["Palatino Linotype", "DejaVu Sans", "Liberation Sans", "sans-serif"]
     matplotlib.rcParams["font.weight"] = "bold"
 
 

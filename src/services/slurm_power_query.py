@@ -336,7 +336,12 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
-        from utils.plot_style import apply_paper_style
+        from utils.plot_style import (
+            POWER_DISTRIBUTION_COLORS,
+            GPU_FQDD_COLORS,
+            METRIC_ID_TO_DISPLAY,
+            apply_paper_style,
+        )
     except ImportError:
         return False
     apply_paper_style()
@@ -351,19 +356,23 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
     for metric in df["metric"].unique():
         sub_all = df[df["metric"] == metric]
         unit_metric = sub_all["units"].iloc[0] if "units" in sub_all.columns and len(sub_all) else "W"
+        display_label = METRIC_ID_TO_DISPLAY.get(metric, metric)
+        color = POWER_DISTRIBUTION_COLORS.get(display_label, "#95a5a6")
         if metric == "PowerConsumption" and "fqdd" in df.columns:
-            for fqdd in sub_all["fqdd"].dropna().unique():
+            fqdd_list = sub_all["fqdd"].dropna().unique().tolist()
+            for i, fqdd in enumerate(fqdd_list):
                 sub = sub_all[sub_all["fqdd"] == fqdd].sort_values("timestamp")
                 if sub.empty:
                     continue
                 sub = sub.copy()
                 sub["power_w"] = convert_power_series_to_watts(sub["value"], unit_metric)
-                ax.plot(sub["timestamp"], sub["power_w"], label=f"GPU ({fqdd})", alpha=0.8)
+                fqdd_color = GPU_FQDD_COLORS[i % len(GPU_FQDD_COLORS)]
+                ax.plot(sub["timestamp"], sub["power_w"], label=f"GPU ({fqdd})", color=fqdd_color, alpha=0.8)
         else:
             sub = sub_all.sort_values("timestamp")
             sub = sub.copy()
             sub["power_w"] = convert_power_series_to_watts(sub["value"], unit_metric)
-            ax.plot(sub["timestamp"], sub["power_w"], label=metric, alpha=0.8)
+            ax.plot(sub["timestamp"], sub["power_w"], label=display_label, color=color, alpha=0.8)
     ax.set_xlabel("Time (local)", fontsize=13, weight="bold")
     ax.set_ylabel("Power (W)", fontsize=13, weight="bold")
     ax.tick_params(axis="both", labelsize=14)
@@ -447,9 +456,9 @@ def plot_pie(
         framealpha=0.95,
         edgecolor="gray",
         fancybox=True,
-        bbox_to_anchor=(0.5, 0.22),
+        bbox_to_anchor=(0.5, 0.15),
     )
-    plt.tight_layout(rect=[0, 0.18, 1, 0.94])
+    plt.tight_layout(rect=[0, 0.16, 1, 0.94])
     path.parent.mkdir(parents=True, exist_ok=True)
     # Ring chart: PDF only
     fig.savefig(path, dpi=300, bbox_inches="tight")
