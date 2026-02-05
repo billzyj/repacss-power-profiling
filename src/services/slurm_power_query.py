@@ -102,7 +102,7 @@ def fetch_raw_power_for_node(
     start_str: str,
     end_str: str,
 ) -> pd.DataFrame:
-    """Query raw power for one node using an existing connection."""
+    """Query raw power for one node; all metrics are queried, empty result sets are skipped."""
     rows = []
     for metric in metrics:
         q = get_compute_metrics_with_joins(
@@ -549,6 +549,9 @@ def main() -> None:
     ts_path = out_dir / "power_timeseries.pdf"
     pie_path = out_dir / "energy_ring.pdf"
 
+    # Same query window for all nodes (rpc->zen4, rpg->h100): local time with offset
+    start_str = _format_local_ts_with_offset(start_time)
+    end_str = _format_local_ts_with_offset(end_time)
     raw_df, pie_segments, energy_by_metric, energy_gpu_per_fqdd = run_job_power(start_time, end_time, nodelist, out_dir)
 
     wrote_csv = save_csv(
@@ -571,13 +574,23 @@ def main() -> None:
             written.append("energy_ring.pdf")
         print(f"Saved: {out_abs}", file=sys.stderr)
         print(f"  Files: {', '.join(written)}", file=sys.stderr)
+        # If H100 but only some metrics had data, note which were missing (DB had no rows for that time/host)
+        if not raw_df.empty and any(n.lower().startswith("rpg") for n in nodelist):
+            got = set(raw_df["metric"].unique())
+            missing = [m for m in H100_METRICS if m not in got]
+            if missing:
+                print(f"  Note: no DB rows for this time/host: {', '.join(missing)}", file=sys.stderr)
         try:
             rel = out_abs.relative_to(_REPO_ROOT)
             print(f"  (in repo: {rel})", file=sys.stderr)
         except (ValueError, AttributeError):
             print(f"  Open folder: open \"{out_abs}\"", file=sys.stderr)
     else:
-        print(f"No power data for job {job_id} (time range / nodelist): no CSV or plots written. Output dir: {out_abs}", file=sys.stderr)
+        print(
+            f"No power data for job {job_id} (time range / nodelist): no CSV or plots written. Output dir: {out_abs}",
+            file=sys.stderr,
+        )
+        print(f"  Query window: start={start_str} end={end_str} nodelist={nodelist}", file=sys.stderr)
 
 
 if __name__ == "__main__":
