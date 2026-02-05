@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 Slurm job power query: at job end (EpilogSlurmctld), use job env to query this repo's
-DB for node power, save raw CSV, plot time series and energy pie chart.
+DB for node power, save raw CSV, plot time series and energy ring chart.
 
-- Node id starting with rpc -> zen4 DB, ZEN4_METRICS.
-- Node id starting with rpg -> h100 DB, H100_METRICS.
-- Raw data -> CSV; time series plot; total energy per metric -> pie chart.
+- Node rpc* -> zen4 database, ZEN4_METRICS (no GPU).
+- Node rpg* -> h100 database, H100_METRICS (includes PowerConsumption = GPU).
+- GPU: four FQDDs = four power curves in time series; energy is summed over all
+  FQDDs as total GPU energy for the ring chart.
 """
 
 import argparse
@@ -61,7 +62,7 @@ def expand_nodelist(nodelist: str) -> List[str]:
 
 
 def node_db_and_metrics(node_id: str) -> Optional[Tuple[str, str, List[str]]]:
-    """Return (database, schema, metrics) for node_id, or None if unsupported."""
+    """Return (database, schema, metrics) for node_id. rpc* -> zen4 + ZEN4_METRICS; rpg* -> h100 + H100_METRICS."""
     node_id = (node_id or "").strip().lower()
     if node_id.startswith("rpc"):
         return ("zen4", "idrac", list(ZEN4_METRICS))
@@ -195,7 +196,7 @@ def run_job_power(
                 for metric in df["metric"].unique():
                     sub = df[df["metric"] == metric].copy()
                     unit_metric = sub["units"].iloc[0] if "units" in sub.columns and len(sub) else "W"
-                    # GPU (PowerConsumption): unit mW; per-FQDD energy, then total = sum(per-FQDD) for consistency
+                    # GPU (PowerConsumption): four FQDDs = four power curves; energy = sum of 4 FQDDs = total GPU
                     if metric == "PowerConsumption" and "fqdd" in sub.columns and "timestamp" in sub.columns and "hostname" in sub.columns:
                         node_gpu_total = 0.0
                         for fqdd in sub["fqdd"].dropna().unique():
