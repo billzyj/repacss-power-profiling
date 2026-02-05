@@ -5,7 +5,7 @@ LOGFILE="${MONSTER_POWER_LOGFILE:-/var/log/slurm/epilogslurmctld.log}"
 
 PYTHON="${MONSTER_POWER_PYTHON:-/opt/repacss-power-profiling/.venv/bin/python}"
 SCRIPT="${MONSTER_POWER_SCRIPT:-/opt/repacss-power-profiling/src/services/slurm_power_query.py}"
-DELAY="${MONSTER_POWER_DELAY_SECONDS:-30}"
+DELAY="${MONSTER_POWER_DELAY_SECONDS:-10}"
 
 KEYWORD="power_profiling"
 

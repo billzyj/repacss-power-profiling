@@ -278,6 +278,22 @@ def _summary_row(raw_columns: List[str], metric: str, value: float, fqdd: str) -
     return row
 
 
+def _utc_series_to_local_with_offset(series: pd.Series) -> pd.Series:
+    """Convert UTC datetime series to local-time strings like 'YYYY-MM-DD HH:MM:SS-05' (CST)."""
+    local_tz = datetime.now().astimezone().tzinfo
+    utc = pd.to_datetime(series, utc=True, errors="coerce")
+    local = utc.dt.tz_convert(local_tz)
+
+    def fmt(d):
+        if pd.isna(d):
+            return ""
+        # e.g. -0500 -> -05, +0000 -> +00
+        z = d.strftime("%z")
+        return d.strftime("%Y-%m-%d %H:%M:%S") + (z[:3] if len(z) >= 3 else "")
+
+    return local.apply(fmt)
+
+
 def save_csv(
     raw_df: pd.DataFrame,
     path: Path,
@@ -286,11 +302,14 @@ def save_csv(
     energy_gpu_per_fqdd: Optional[Dict[str, float]] = None,
     is_h100: bool = False,
 ) -> bool:
-    """Save raw data to CSV; optionally append energy summary rows below (for pie chart). Returns True if file was written."""
+    """Save raw data to CSV (timestamps in local time with offset, e.g. -05); optionally append energy summary. Returns True if file was written."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if raw_df.empty:
         return False
-    raw_df.to_csv(path, index=False, date_format="%Y-%m-%d %H:%M:%S")
+    out = raw_df.copy()
+    if "timestamp" in out.columns:
+        out["timestamp"] = _utc_series_to_local_with_offset(out["timestamp"])
+    out.to_csv(path, index=False)
     if energy_by_metric is None or pie_segments is None:
         return True
     summary = _energy_summary_rows(
@@ -309,7 +328,7 @@ def save_csv(
 
 
 def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
-    """Plot power (W) vs time per metric; save figure. Font/style aligned with pie chart. Returns True if file was written."""
+    """Plot power (W) vs time per metric; x-axis local time. Returns True if file was written."""
     if raw_df.empty or "timestamp" not in raw_df.columns or "value" not in raw_df.columns:
         return False
     try:
@@ -322,7 +341,9 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
         return False
     apply_paper_style()
     df = raw_df.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    # DB returns UTC; convert to local for x-axis
+    local_tz = datetime.now().astimezone().tzinfo
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce").dt.tz_convert(local_tz)
     df = df.dropna(subset=["timestamp"])
     if df.empty:
         return False
@@ -330,7 +351,6 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
     for metric in df["metric"].unique():
         sub_all = df[df["metric"] == metric]
         unit_metric = sub_all["units"].iloc[0] if "units" in sub_all.columns and len(sub_all) else "W"
-        # GPU (PowerConsumption): plot one curve per FQDD; unit is mW
         if metric == "PowerConsumption" and "fqdd" in df.columns:
             for fqdd in sub_all["fqdd"].dropna().unique():
                 sub = sub_all[sub_all["fqdd"] == fqdd].sort_values("timestamp")
@@ -344,7 +364,7 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
             sub = sub.copy()
             sub["power_w"] = convert_power_series_to_watts(sub["value"], unit_metric)
             ax.plot(sub["timestamp"], sub["power_w"], label=metric, alpha=0.8)
-    ax.set_xlabel("Time (UTC)", fontsize=13, weight="bold")
+    ax.set_xlabel("Time (local)", fontsize=13, weight="bold")
     ax.set_ylabel("Power (W)", fontsize=13, weight="bold")
     ax.tick_params(axis="both", labelsize=14)
     ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=14, frameon=True)
@@ -359,8 +379,12 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
     return True
 
 
-def plot_pie(pie_segments: Dict[str, float], path: Path) -> bool:
-    """Plot pie chart: Zen4 = CPU, Memory, Storage, Fan, PSU loss, Others; H100 + GPU. Returns True if file was written."""
+def plot_pie(
+    pie_segments: Dict[str, float],
+    path: Path,
+    job_id: Optional[str] = None,
+) -> bool:
+    """Plot ring chart: center = Job id + total kWh; Zen4/H100 segments. Returns True if file was written."""
     if not pie_segments or sum(pie_segments.values()) == 0:
         return False
     try:
@@ -370,23 +394,27 @@ def plot_pie(pie_segments: Dict[str, float], path: Path) -> bool:
         from utils.plot_style import (
             POWER_DISTRIBUTION_COLORS,
             apply_paper_style,
-            create_pie_with_smart_labels,
+            create_ring_with_smart_labels,
             set_pie_text_color,
         )
     except ImportError:
         return False
     apply_paper_style()
-    # pie_segments keys are display labels (CPU, Memory, Storage, Fan, PSU loss, Others, [GPU])
     display_labels = list(pie_segments.keys())
     values = [pie_segments[k] for k in display_labels]
     colors = [
         POWER_DISTRIBUTION_COLORS.get(lbl, "#95a5a6") for lbl in display_labels
     ]
     total_kwh = sum(values)
-    title = f"Total Energy Consumption (kWh)\n{total_kwh:.3f} kWh"
+    center_title = f"Job {job_id}" if job_id else "Total"
+    center_value = f"{total_kwh:.3f} kWh"
+    title = "Total Energy Consumption (kWh)"
     fig, ax = plt.subplots(figsize=(8, 8))
-    wedges, texts, autotexts = create_pie_with_smart_labels(
-        ax, values, display_labels, colors, title, startangle=90
+    wedges, texts, autotexts = create_ring_with_smart_labels(
+        ax, values, display_labels, colors, title,
+        center_title=center_title,
+        center_value=center_value,
+        startangle=90,
     )
     set_pie_text_color(autotexts, colors, values, display_labels)
     # Legend order: GPU, Memory, CPU, Storage, Others, PSU loss, Fan
@@ -422,9 +450,8 @@ def plot_pie(pie_segments: Dict[str, float], path: Path) -> bool:
     )
     plt.tight_layout(rect=[0, 0.12, 1, 0.98])
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Ring chart: PDF only
     fig.savefig(path, dpi=300, bbox_inches="tight")
-    pdf_path = path.with_suffix(".pdf")
-    fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return True
 
@@ -510,7 +537,7 @@ def main() -> None:
     prefix = f"{job_id}_"
     csv_path = out_dir / f"{prefix}raw_power.csv"
     ts_path = out_dir / f"{prefix}timeseries.png"
-    pie_path = out_dir / f"{prefix}energy_pie.png"
+    pie_path = out_dir / f"{prefix}energy_pie.pdf"
 
     raw_df, pie_segments, energy_by_metric, energy_gpu_per_fqdd = run_job_power(start_time, end_time, nodelist, out_dir)
 
@@ -523,7 +550,7 @@ def main() -> None:
         is_h100=any(n.lower().startswith("rpg") for n in nodelist),
     )
     wrote_ts = plot_time_series(raw_df, ts_path)
-    wrote_pie = plot_pie(pie_segments, pie_path)
+    wrote_pie = plot_pie(pie_segments, pie_path, job_id=job_id)
 
     out_abs = out_dir.resolve()
     if wrote_csv or wrote_ts or wrote_pie:
@@ -531,7 +558,7 @@ def main() -> None:
         if wrote_ts:
             written.append(f"{prefix}timeseries.png")
         if wrote_pie:
-            written.extend([f"{prefix}energy_pie.png", f"{prefix}energy_pie.pdf"])
+            written.append(f"{prefix}energy_pie.pdf")
         print(f"Saved: {out_abs}", file=sys.stderr)
         print(f"  Files: {', '.join(written)}", file=sys.stderr)
         try:
