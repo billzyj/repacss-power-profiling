@@ -6,7 +6,7 @@ Compatible with query-derived energy data (e.g. slurm_power_query pie).
 from typing import Any, Dict, List, Optional, Tuple
 
 # Display name -> hex (colorblind-friendly, harmonious; matches ring chart style)
-POWER_DISTRIBUTION_COLORS: Dict[str, str] = {
+POWER_DISTRIBUTION_RING_COLORS: Dict[str, str] = {
     "GPU": "#83af40",
     "CPU": "#077fbb",
     "Memory": "#5cbee3",
@@ -14,16 +14,24 @@ POWER_DISTRIBUTION_COLORS: Dict[str, str] = {
     "Others": "#919191",
     "Fan": "#a8273d",
     "PSU loss": "#d86723",
-    "Input": "#95a5a6",
-    "Output": "#7f8c8d",
+
 }
 
+POWER_DISTRIBUTION_TIME_SERIES_COLORS: Dict[str, str] = {
+    "CPU": "#2b6cb0",
+    "Memory": "#6faed9",
+    "Storage": "#7b5aa6",
+    "Others": "#a0a0a0",
+    "Fan": "#b23a48",
+    "SystemInput": "#000000",
+    "SystemOutput": "#444444",
+}
 # Four green-shade colors for GPU FQDDs (time series: one per GPU slot, distinguishable)
-GPU_FQDD_COLORS: List[str] = [
+TIME_SERIES_GPU_FQDD_COLORS = [
+    "#1b4332",  # very dark green
     "#2d6a2d",  # dark green
     "#83af40",  # main GPU green
-    "#9bc958",  # light green
-    "#c5e89c",  # pale green
+    "#b7d77a",  # light green
 ]
 
 # Metric ID from DB -> display label for pie
@@ -74,10 +82,12 @@ def create_ring_with_smart_labels(
         autopct=lambda pct: f"{pct:.1f}%",
         startangle=startangle,
         colors=colors,
-        textprops={"fontsize": 12, "weight": "bold"},
+        textprops={"fontsize": 24, "weight": "bold"},
         pctdistance=0.75,
         wedgeprops=dict(width=0.5, edgecolor="white", linewidth=1.5),
     )
+    for t in autotexts:
+        t.set_fontsize(24)
 
     total = sum(values)
     ring_center = 0.7
@@ -112,9 +122,9 @@ def create_ring_with_smart_labels(
         ax.text(
             0, 0,
             f"{center_title}\n{center_value}".strip(),
-            ha="center", va="center", fontsize=14, weight="bold",
+            ha="center", va="center", fontsize=26, weight="bold",
         )
-    ax.set_title(title, fontsize=13, weight="bold", pad=2)
+    ax.set_title(title, fontsize=26, weight="bold", pad=-60)
     return wedges, texts, autotexts
 
 

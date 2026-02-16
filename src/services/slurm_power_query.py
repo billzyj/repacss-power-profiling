@@ -338,8 +338,8 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
         from utils.plot_style import (
-            POWER_DISTRIBUTION_COLORS,
-            GPU_FQDD_COLORS,
+            POWER_DISTRIBUTION_TIME_SERIES_COLORS,
+            TIME_SERIES_GPU_FQDD_COLORS,
             METRIC_ID_TO_DISPLAY,
             apply_paper_style,
         )
@@ -347,9 +347,15 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
         return False
     apply_paper_style()
     df = raw_df.copy()
-    # DB returns UTC; convert to local for x-axis
+    # Parse timestamp: if already has timezone info (from CSV), parse as-is; otherwise assume UTC
+    # Then convert to local timezone for x-axis display
     local_tz = datetime.now().astimezone().tzinfo
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce").dt.tz_convert(local_tz)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    # If timestamps are timezone-aware, convert to local; if naive, assume UTC then convert
+    if df["timestamp"].dt.tz is None:
+        df["timestamp"] = df["timestamp"].dt.tz_localize("UTC").dt.tz_convert(local_tz)
+    else:
+        df["timestamp"] = df["timestamp"].dt.tz_convert(local_tz)
     df = df.dropna(subset=["timestamp"])
     if df.empty:
         return False
@@ -358,7 +364,7 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
         sub_all = df[df["metric"] == metric]
         unit_metric = sub_all["units"].iloc[0] if "units" in sub_all.columns and len(sub_all) else "W"
         display_label = METRIC_ID_TO_DISPLAY.get(metric, metric)
-        color = POWER_DISTRIBUTION_COLORS.get(display_label, "#95a5a6")
+        color = POWER_DISTRIBUTION_TIME_SERIES_COLORS.get(display_label, "#95a5a6")
         if metric == "PowerConsumption" and "fqdd" in df.columns:
             fqdd_list = sub_all["fqdd"].dropna().unique().tolist()
             for i, fqdd in enumerate(fqdd_list):
@@ -367,17 +373,18 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
                     continue
                 sub = sub.copy()
                 sub["power_w"] = convert_power_series_to_watts(sub["value"], unit_metric)
-                fqdd_color = GPU_FQDD_COLORS[i % len(GPU_FQDD_COLORS)]
+                fqdd_color = TIME_SERIES_GPU_FQDD_COLORS[i % len(TIME_SERIES_GPU_FQDD_COLORS)]
                 ax.plot(sub["timestamp"], sub["power_w"], label=f"GPU ({fqdd})", color=fqdd_color, alpha=0.8)
         else:
             sub = sub_all.sort_values("timestamp")
             sub = sub.copy()
             sub["power_w"] = convert_power_series_to_watts(sub["value"], unit_metric)
             ax.plot(sub["timestamp"], sub["power_w"], label=display_label, color=color, alpha=0.8)
-    ax.set_xlabel("Time (local)", fontsize=13, weight="bold")
-    ax.set_ylabel("Power (W)", fontsize=13, weight="bold")
-    ax.tick_params(axis="both", labelsize=14)
-    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=14, frameon=True)
+    ax.set_xlabel("Time (local)", fontsize=18, weight="bold")
+    ax.set_ylabel("Power (W)", fontsize=18, weight="bold")
+    ax.tick_params(axis="x", labelsize=15)
+    ax.tick_params(axis="y", labelsize=18)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=16, frameon=True)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M", tz=df["timestamp"].dt.tz))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=30, ha="right")
@@ -402,7 +409,7 @@ def plot_pie(
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from utils.plot_style import (
-            POWER_DISTRIBUTION_COLORS,
+            POWER_DISTRIBUTION_RING_COLORS,
             apply_paper_style,
             create_ring_with_smart_labels,
             set_pie_text_color,
@@ -413,7 +420,7 @@ def plot_pie(
     display_labels = list(pie_segments.keys())
     values = [pie_segments[k] for k in display_labels]
     colors = [
-        POWER_DISTRIBUTION_COLORS.get(lbl, "#95a5a6") for lbl in display_labels
+        POWER_DISTRIBUTION_RING_COLORS.get(lbl, "#95a5a6") for lbl in display_labels
     ]
     total_kwh = sum(values)
     center_title = f"Job {job_id}" if job_id else "Total"
@@ -441,7 +448,7 @@ def plot_pie(
     legend_elements = [
         plt.Rectangle(
             (0, 0), 1, 1,
-            facecolor=POWER_DISTRIBUTION_COLORS.get(lbl, "#95a5a6"),
+            facecolor=POWER_DISTRIBUTION_RING_COLORS.get(lbl, "#95a5a6"),
             edgecolor="white",
             linewidth=1.2,
         )
@@ -452,14 +459,14 @@ def plot_pie(
         legend_labels,
         loc="lower center",
         ncol=min(len(legend_labels), 4),
-        fontsize=11,
+        fontsize=16,
         frameon=True,
         framealpha=0.95,
         edgecolor="gray",
         fancybox=True,
-        bbox_to_anchor=(0.5, 0.15),
+        bbox_to_anchor=(0.5, 0.08),
     )
-    plt.tight_layout(rect=[0, 0.16, 1, 0.94])
+    plt.tight_layout(rect=[0, 0.12, 1, 0.94])
     path.parent.mkdir(parents=True, exist_ok=True)
     # Ring chart: PDF only
     fig.savefig(path, dpi=300, bbox_inches="tight")
