@@ -12,7 +12,9 @@ repacss-power-measurement/
 ├── README.md                  # Main documentation and quick start
 ├── docs/                      # Documentation directory
 │   ├── USAGE_GUIDE.md        # Detailed usage examples and troubleshooting
-│   └── PROJECT_STRUCTURE.md   # This file - technical architecture
+│   ├── PROJECT_STRUCTURE.md   # This file - technical architecture
+│   └── _working/             # Temporary refactor planning artifacts
+│       └── refactor-plan.md  # Temporary mixed-language working plan, deleted before merge
 ├── requirements.txt           # Python dependencies
 ├── setup.py                   # Setup script for easy installation
 ├── .gitignore                # Git ignore rules
@@ -217,6 +219,18 @@ Simple connection testing script:
 3. **Test**: Run `python src/examples/test_connection.py`
 4. **Develop**: Use `src/examples/basic_usage.py` as reference
 5. **Deploy**: Ensure `src/core/config.py` is in `.gitignore`
+
+## Temporary Planning Artifacts
+
+`docs/_working/` is reserved for temporary refactor collaboration artifacts.
+
+Rules:
+
+1. Files in `docs/_working/` may be used by both Codex and Claude Code during active refactor work.
+2. Temporary planning files may use mixed Chinese and English when that helps collaboration.
+3. Stable project documentation must remain in English.
+4. Durable decisions must be copied into English documentation before the refactor is finalized.
+5. Temporary planning files must be deleted before merge or long-term publication.
 
 ## File Naming Conventions
 

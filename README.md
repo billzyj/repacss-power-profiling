@@ -85,6 +85,18 @@ python -m src.cli databases
 python examples/test_db_connection.py
 ```
 
+### 3a. Fresh Clone Smoke Test
+
+Use this path when validating the repository on a remote machine after a fresh `git clone`.
+This smoke test is intended to avoid DB or SSH credentials and should remain the minimum validation path for refactor work.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python tests/run_tests.py --type unit
+```
+
 ### 4. Use
 
 ```bash
@@ -129,6 +141,17 @@ python -m src.cli custom --format csv --output report.csv
 - **CLI (recommended)**: `python -m src.cli ...`
 - **Legacy scripts**: `src/scripts/run_compute_power_queries.py` (H100/ZEN4)
 - **Programmatic APIs**: import from `services/`, `analysis/`, `queries/`
+
+## Refactor Workflow
+
+For large refactors, use a temporary working plan at `docs/_working/refactor-plan.md`.
+
+Rules:
+
+1. The temporary refactor plan may use mixed Chinese and English for collaboration between the user, Codex, and Claude Code.
+2. Stable repository documentation must remain in English.
+3. Any durable decisions from the temporary plan must be moved into `README.md` or `docs/*`.
+4. Remove the temporary plan file before the refactor branch is finalized.
 
 ### CLI Commands
 
