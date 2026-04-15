@@ -75,6 +75,14 @@ Its production execution model is Slurm-driven:
 - `Epilog`
 - `EpilogSlurmctld`
 
+Current P3 implementation status:
+
+- `inband/collectors/base.py` defines the shared collector contract
+- `inband/collectors/rapl.py` implements powercap-backed CPU sampling
+- `inband/collectors/nvidia_smi.py` implements NVIDIA GPU sampling via `nvidia-smi`
+- `inband/collectors/rocm_smi.py` implements ROCm probing and best-effort JSON sampling
+- `inband/collectors/auto_detect.py` owns collector ordering and auto-detect helpers
+
 ### Entry Layer
 
 #### `cli/`
@@ -89,6 +97,14 @@ Current design direction:
 - OOB query and export workflows are the main CLI use case
 - In-band may expose limited debug/status commands
 - In-band runtime collection itself remains Slurm-bound, not CLI-driven
+
+Current P3 debug surfaces:
+
+- `ib probe`
+- `ib sample`
+
+These exist for collector validation and local testing only.
+They are not the final production path for in-band collection.
 
 ### Test Layer
 
@@ -122,6 +138,7 @@ The repository is in an intermediate state.
 ### What Is Already Happening
 
 - new refactor work is being added under `shared/` and `oob/`
+- new in-band collector code is being added under `inband/collectors/`
 - legacy Slurm OOB entrypoints are beginning to route into the new architecture
 - compatibility is still being preserved for existing imports and scripts where practical
 
@@ -181,6 +198,14 @@ Expected placement:
 
 - collector lifecycle and compute-node hook logic in `inband/`
 - aggregation and staged artifact processing under `inband/`
+
+## RAPL Portability Notes
+
+The in-band `rapl` collector is intentionally written around generic powercap discovery instead of an Intel-only path.
+
+- Intel usually exposes RAPL via powercap sysfs and is the most straightforward Linux target.
+- AMD may expose compatible files, but support is less uniform and can depend on MSR or HSMP-backed kernel interfaces.
+- AMD domain naming also differs more across generations, so domain presence should always be probed dynamically.
 
 ## Temporary Planning Artifacts
 

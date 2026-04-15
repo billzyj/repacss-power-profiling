@@ -19,6 +19,13 @@ The long-term source layout is organized around three primary implementation dom
 
 IB is not designed as a standalone manual collection workflow. Its primary execution model is Slurm-driven (`Prolog + Epilog + EpilogSlurmctld`), while the top-level CLI is primarily an OOB query/export surface plus limited debug/status helpers.
 
+P3 status for in-band collection:
+
+- `rapl` is implemented as a powercap-based CPU collector
+- `nvidia_smi` is implemented as a CLI-driven NVIDIA GPU collector
+- `rocm_smi` is implemented as a best-effort ROCm interface collector for probing and basic JSON sampling
+- `ib probe` and `ib sample` exist only as debug helpers; they are not the final production workflow
+
 ## Current Migration Status
 
 The repository is currently in transition from the legacy `src/` monolith to the new domain-oriented layout above.
@@ -91,7 +98,8 @@ pip install -r requirements.txt
 python3 setup.py
 
 # Step 2: Edit the generated file with your credentials
-# File location: src/database/config/.env
+# Preferred file location: .env
+# Legacy fallback location during migration: src/database/config/.env
 # Edit with your actual database host, username, password, SSH details, etc.
 ```
 
@@ -149,10 +157,16 @@ python3 -m cli oob query --hostname rpg-93-1 --start "2025-01-01 00:00:00" --end
 python3 -m cli oob query --hostname rpc-91-2 --start "2025-01-01 00:00:00" --end "2025-01-01 01:00:00" --output output/query.csv --format csv
 
 # Manual OOB job export
-python3 -m cli oob job --job-id 96597 --user kalebuch --nodelist rpg-93-6 --start "2026-04-13 00:00:00" --end "2026-04-13 01:00:00" --outdir output/job-96597
+python3 -m cli oob job --job-id 96597 --user kalebuch --nodelist rpg-93-6 --start "2026-04-13 00:00:00" --end "2026-04-13 01:00:00"
 
 # Generic export surface (currently OOB-backed in P0-P2)
 python3 -m cli export --job 96597 --user kalebuch --nodelist rpg-93-6 --start "2026-04-13 00:00:00" --end "2026-04-13 01:00:00" --output output/export-96597
+
+# Debug-only in-band collector probe
+python3 -m cli ib probe
+
+# Debug-only short in-band sample session
+python3 -m cli ib sample --collector rapl --interval-ms 1000 --duration-s 3 --output-dir output/inband-debug
 ```
 
 ## Available Interfaces
@@ -161,6 +175,7 @@ python3 -m cli export --job 96597 --user kalebuch --nodelist rpg-93-6 --start "2
 - **Legacy compatibility CLI**: `python3 -m src.cli ...`
 - **OOB programmatic APIs**: moving into `oob/` and `shared/`
 - **IB runtime entrypoints**: Slurm `Prolog`, `Epilog`, and `EpilogSlurmctld`
+- **IB debug helpers**: `python3 -m cli ib probe` and `python3 -m cli ib sample`
 - **Legacy scripts and legacy modules**: temporarily retained under `src/` for compatibility during migration
 
 ## Refactor Workflow
@@ -187,21 +202,35 @@ Refactor direction for this repository:
 python3 -m cli --help
 python3 -m cli config show
 python3 -m cli config test
+python3 -m cli ib probe --help
+python3 -m cli ib sample --help
 python3 -m cli oob query --help
 python3 -m cli oob job --help
 python3 -m cli export --help
 ```
 
-Current CLI scope in P0-P2:
+Current CLI scope in P3:
 
 - `config show`
 - `config test`
+- `ib probe`
+- `ib sample`
 - `oob query`
 - `oob job`
 - `export`
 
-The top-level CLI is currently OOB-focused.
-In-band runtime collection remains Slurm-driven and is not yet exposed as a primary manual CLI workflow.
+The top-level CLI remains OOB-focused.
+The new IB commands are debug helpers for collector validation only.
+Production in-band collection remains Slurm-driven.
+
+## Intel vs AMD RAPL Notes
+
+`RAPL` is not identical across Intel and AMD platforms, so the collector probes sysfs generically instead of hard-coding Intel-only assumptions.
+
+- Intel commonly exposes RAPL domains through Linux powercap sysfs under paths like `/sys/class/powercap/intel-rapl:*`, with readable `energy_uj` and `max_energy_range_uj` files.
+- AMD support is less uniform. Some systems expose powercap-style counters, but others rely on MSR- or HSMP-backed interfaces, and the available domains differ by generation.
+- Intel platforms often expose domain sets such as package, dram, or psys. AMD commonly surfaces package/core or package/L3 style counters depending on CPU family.
+- For that reason, the current P3 collector supports powercap-backed RAPL directly and reports AMD-specific absence as a probe result rather than pretending that Intel paths always exist.
 
 ### Analysis Types
 

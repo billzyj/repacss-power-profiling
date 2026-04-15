@@ -16,3 +16,6 @@ class SlurmResolutionError(REPACSSPowerError):
 class OOBBackendError(REPACSSPowerError):
     """Raised when an OOB backend fails."""
 
+
+class InbandCollectorError(REPACSSPowerError):
+    """Raised when an in-band collector fails."""
