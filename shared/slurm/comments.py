@@ -13,13 +13,36 @@ VALID_MODES = {"oob", "inband", "both"}
 VALID_BACKENDS = {"db", "api"}
 
 
+def extract_power_token(raw_comment: str) -> str:
+    """Extract the REPACSS power token from a potentially mixed Slurm comment.
+
+    Slurm comments may contain multiple workflow namespaces separated by whitespace,
+    for example ``ECHO=1;R=0.80 power:both;collectors=rapl``. The power parser only
+    consumes the first whitespace-delimited token that starts with ``power:``.
+    """
+
+    raw = (raw_comment or "").strip()
+    if not raw:
+        return ""
+
+    if raw == LEGACY_KEYWORD:
+        return raw
+
+    for token in raw.split():
+        token = token.strip()
+        if token == LEGACY_KEYWORD or token.startswith("power:"):
+            return token
+    return ""
+
+
 def parse_power_comment(raw_comment: str) -> ParsedPowerComment:
     """Parse a Slurm comment using the refactor-plan grammar."""
     raw = (raw_comment or "").strip()
-    if not raw:
+    token = extract_power_token(raw)
+    if not token:
         return ParsedPowerComment(mode=None, raw=raw, enabled=False)
 
-    if raw == LEGACY_KEYWORD:
+    if token == LEGACY_KEYWORD:
         return ParsedPowerComment(
             mode="oob",
             raw=raw,
@@ -27,7 +50,7 @@ def parse_power_comment(raw_comment: str) -> ParsedPowerComment:
             warnings=["legacy comment keyword accepted as power:oob"],
         )
 
-    parts = [part.strip() for part in raw.split(";") if part.strip()]
+    parts = [part.strip() for part in token.split(";") if part.strip()]
     if not parts:
         return ParsedPowerComment(mode=None, raw=raw, enabled=False)
 
@@ -86,4 +109,3 @@ def parse_power_comment(raw_comment: str) -> ParsedPowerComment:
         warnings=warnings,
         enabled=True,
     )
-

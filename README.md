@@ -26,6 +26,13 @@ P3 status for in-band collection:
 - `rocm_smi` is implemented as a best-effort ROCm interface collector for probing and basic JSON sampling
 - `ib probe` and `ib sample` exist only as debug helpers; they are not the final production workflow
 
+Current P4 skeleton status:
+
+- `inband/storage.py` defines shared NFS staging and `/run` state-file helpers
+- `inband/runner.py` implements the per-node long-running runner used by systemd
+- `inband/hooks.py` implements Slurm-facing `prolog` and `epilog` helpers
+- `shared/slurm/repacss-power.prolog.sh`, `shared/slurm/repacss-power.epilog.sh`, and `shared/slurm/repacss-power-ib@.service` provide the first deployable wrapper set for compute-node integration
+
 ## Current Migration Status
 
 The repository is currently in transition from the legacy `src/` monolith to the new domain-oriented layout above.
@@ -215,6 +222,7 @@ Current CLI scope in P3:
 - `config test`
 - `ib probe`
 - `ib sample`
+- `ib status`
 - `oob query`
 - `oob job`
 - `export`

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -9,6 +11,14 @@ from typing import Optional
 import click
 
 from inband.collectors import build_collectors, probe_collectors, select_collectors
+from inband.storage import (
+    DEFAULT_IB_STORE_ROOT,
+    done_marker_path,
+    node_status_path,
+    read_json_file,
+    resolve_storage_key_for_job,
+    runner_status_path,
+)
 from shared.errors import InbandCollectorError
 
 
@@ -24,6 +34,41 @@ def _print_probe(collector_probe):
 @click.group(name="ib")
 def ib_group():
     """Debug and validation helpers for in-band collectors."""
+
+
+@ib_group.command("status")
+@click.option("--job", "job_id", help="Resolve the latest internal storage key for this Slurm job id.")
+@click.option("--storage-key", help="Inspect one exact internal staging key.")
+@click.option("--hostname", default=None, help="Hostname subtree to inspect. Defaults to the local hostname.")
+@click.option(
+    "--store-root",
+    type=click.Path(path_type=Path),
+    default=Path(os.environ.get("MONSTER_POWER_IB_STORE_ROOT", str(DEFAULT_IB_STORE_ROOT))),
+    show_default=True,
+    help="Shared in-band staging root.",
+)
+def status_command(job_id: Optional[str], storage_key: Optional[str], hostname: Optional[str], store_root: Path):
+    """Inspect IB staging and runner status for one node."""
+
+    hostname = hostname or os.uname().nodename
+    if not storage_key and not job_id:
+        raise click.ClickException("Pass --job or --storage-key.")
+
+    resolved_storage_key = storage_key or resolve_storage_key_for_job(job_id=job_id or "", ib_store_root=store_root)
+    if not resolved_storage_key:
+        raise click.ClickException("No matching in-band staging path was found.")
+
+    runner_status = read_json_file(runner_status_path(resolved_storage_key, hostname, ib_store_root=store_root))
+    node_status = read_json_file(node_status_path(resolved_storage_key, hostname, ib_store_root=store_root))
+    done_path = done_marker_path(resolved_storage_key, hostname, ib_store_root=store_root)
+
+    click.echo(f"storage_key: {resolved_storage_key}")
+    click.echo(f"hostname: {hostname}")
+    click.echo(f"done: {'yes' if done_path.exists() else 'no'}")
+    click.echo("runner_status:")
+    click.echo(json.dumps(runner_status or {"state": "missing"}, indent=2, sort_keys=True))
+    click.echo("node_status:")
+    click.echo(json.dumps(node_status or {"state": "missing"}, indent=2, sort_keys=True))
 
 
 @ib_group.command("probe")

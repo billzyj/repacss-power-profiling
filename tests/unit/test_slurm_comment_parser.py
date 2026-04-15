@@ -40,3 +40,11 @@ def test_semantic_mismatch_becomes_warning():
     assert parsed.mode == "inband"
     assert parsed.backend == "db"
     assert any("ignored backend" in warning for warning in parsed.warnings)
+
+
+def test_mixed_comment_namespace_extracts_power_token():
+    parsed = parse_power_comment("ECHO=1;R=0.80 power:both;collectors=rapl;interval_ms=750")
+    assert parsed.enabled is True
+    assert parsed.mode == "both"
+    assert parsed.collectors == ["rapl"]
+    assert parsed.interval_ms == 750

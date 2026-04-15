@@ -1,0 +1,14 @@
+[Unit]
+Description=REPACSS in-band power collector for %i
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/run/repacss-power/%i.env
+ExecStart=/bin/sh -lc 'exec "${REPACSS_POWER_PYTHON:-python3}" -m inband.runner'
+Restart=no
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

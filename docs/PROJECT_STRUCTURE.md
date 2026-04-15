@@ -83,6 +83,15 @@ Current P3 implementation status:
 - `inband/collectors/rocm_smi.py` implements ROCm probing and best-effort JSON sampling
 - `inband/collectors/auto_detect.py` owns collector ordering and auto-detect helpers
 
+Current P4 skeleton status:
+
+- `inband/storage.py` owns internal `storage_key`, staging-path, and state-file helpers
+- `inband/runner.py` is the node-local long-running runner process intended for systemd
+- `inband/hooks.py` is the Slurm-facing `prolog` / `epilog` bridge
+- `shared/slurm/repacss-power.prolog.sh`
+- `shared/slurm/repacss-power.epilog.sh`
+- `shared/slurm/repacss-power-ib@.service`
+
 ### Entry Layer
 
 #### `cli/`
@@ -102,6 +111,7 @@ Current P3 debug surfaces:
 
 - `ib probe`
 - `ib sample`
+- `ib status`
 
 These exist for collector validation and local testing only.
 They are not the final production path for in-band collection.

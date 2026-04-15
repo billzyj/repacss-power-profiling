@@ -1,4 +1,4 @@
-# Temporary Refactor Plan
+# repacss-power-profiling Refactor Plan (P0-P4 Snapshot)
 
 Status: active working artifact
 
@@ -87,6 +87,8 @@ oob/
 
 inband/
   collectors/
+  runner.py
+  hooks.py
   slurm/
   aggregator.py
   storage.py
@@ -183,6 +185,9 @@ Job ends
        └─ if mode is both: unified export combines OOB + IB into one artifact
 ```
 
+Compute-node `Epilog` and headnode `EpilogSlurmctld` are treated as parallel job-end triggers.
+Synchronization is achieved by `.done` polling rather than assuming strict hook ordering.
+
 `Prolog` on compute nodes:
 
 - fires per node at job start
@@ -269,9 +274,7 @@ IB storage in v1 is file-based staging on a shared filesystem.
 Architectural rule:
 
 - IB does not write to a central DB in v1
-- OOB is a job-end read path against pre-existing telemetry storage (BMC pushes iDRAC data to MONSTER/TimescaleDB independently; this project only reads at job end)
-- IB is a continuous write path whose volume scales with cluster utilization:
-  e.g. 50 concurrent jobs × 4 nodes × 8 metrics × 1 write/s = 1,600 sustained writes/s
+- OOB is a job-end read path against pre-existing telemetry storage
 - a central DB would become a write hotspot at scale; shared-filesystem staging distributes writes across per-node subdirectories
 - v1 therefore uses shared-filesystem staging plus job-end aggregation
 
@@ -291,7 +294,7 @@ It is not the primary user artifact location.
 
 The staging path must not use bare `job_id` alone.
 
-Use a unique internal storage key:
+Use a unique job-run key:
 
 ```text
 {ib_store_root}/{storage_key}/
@@ -303,7 +306,6 @@ Where `storage_key` is:
 {cluster_name}-{job_id}-{job_start_epoch}
 ```
 
-This avoids collisions across job-id reuse and makes cleanup safer.
 Users query by Slurm `job_id`; `storage_key` is an internal filesystem identifier only.
 
 #### Staging layout
@@ -377,8 +379,10 @@ Collector success and failure are recorded in `node_status.json` and summarized 
 #### Aggregation contract
 
 - headnode waits for `.done` markers with configurable timeout
+- config key: `epilog_done_timeout_s`
 - default timeout is `60s`
 - missing node data is recorded as incomplete
+- nodes missing `.done` after timeout are marked as `timeout` and aggregation continues
 - aggregation is idempotent and safe to re-run
 - `summary.json` is an intermediate IB artifact, not the final user-facing export
 
@@ -425,17 +429,23 @@ Defaults:
 Validation rules:
 
 - `backend` is valid only when mode includes OOB
+- `backend` in pure `power:inband` is treated as invalid input
 - `collectors` and `interval_ms` are valid only when mode includes IB
-
-Error severity:
-
-- structural errors (e.g. `power:foo`, `power:`, missing mode) cause the job to skip power workflow and emit a parse error record
-- semantic warnings (e.g. `power:oob;interval_ms=1000`, `power:inband;backend=api`) emit a warning log, ignore the inapplicable keys, and proceed with the recognized parameters
+- invalid grammar causes the job to skip power workflow and emit an explicit parse error record
 
 Forward-compatibility note:
 
 - v1 remains flat key-value grammar
 - domain-scoped dotted keys are a future extension, not part of v1
+
+Namespace coexistence rule:
+
+- the Slurm comment field may contain multiple independent workflow blocks
+- `power` parsing only consumes the token that starts with `power:`
+- ECHO-DVFS parsing only consumes `ECHO=` and its related key-value tokens
+- the two parsers must not rewrite or reinterpret each other’s tokens
+- recommended mixed example:
+  - `ECHO=1;R=0.80 power:both;collectors=rapl;interval_ms=1000`
 
 ### 7. Unified export and delivery policy
 
@@ -476,7 +486,7 @@ Rules:
 
 Delivery flow:
 
-1. headnode `EpilogSlurmctld` assembles the final export in a system-controlled temporary path
+1. headnode assembles the final export in a system-controlled temporary path
 2. delivery requires privileges sufficient to create, copy, and ownership-fix the user-facing artifact:
    - if `EpilogSlurmctld` has the required privileges, it may perform delivery directly
    - otherwise it must invoke a dedicated privileged helper
@@ -485,7 +495,6 @@ Delivery flow:
 3. the delivered artifact becomes the primary result
 
 The delivery behavior must be consistent across OOB-only, IB-only, and `both`.
-Delivery is part of the job-end workflow, not a separate daemon or cron job.
 
 ### 8. CLI redesign
 
@@ -515,10 +524,157 @@ Rules:
 - `oob job` triggers OOB query for a job and displays a summary preview to stdout; it does not produce file exports
 - `oob query` is a general metrics query surface; defaults to stdout table preview, supports `--output` for file export
 - `ib status` inspects IB staging and aggregation state; `--job` is the standard user-facing lookup and `--storage-key` is a debug-only exact lookup for internal staging paths
-- `export` is the only command that produces unified job export artifacts:
+- `export` is the only command that produces file exports:
   - for OOB-only, it runs the OOB job query and writes the export artifact
   - for IB-only, it consumes IB staging artifacts
   - for `both`, it merges OOB query results with IB staging artifacts
+
+### 9. P4 — In-Band Slurm Integration
+
+P4 makes in-band collection a Slurm-driven, per-node systemd service workflow modeled after the existing `echo.prolog.sh` pattern, while keeping shared/NFS staging as the authoritative storage path.
+
+Fixed decisions for P4:
+
+- `Prolog` starts one job-scoped IB collector service per compute node when comment mode includes IB.
+- `Epilog` on each compute node stops that service and finalizes per-node artifacts.
+- `EpilogSlurmctld` on the headnode remains the single job-level aggregator and orchestrator.
+- authoritative IB storage is a shared filesystem path:
+  - `{ib_store_root}/{storage_key}/{hostname}/...`
+- user-facing delivery is optional in P4:
+  - P4 must produce correct system/NFS staging and headnode aggregation
+  - delivery into user directories is an enhancement path, not a hard blocker for P4 completion
+- local spool is optional, not default:
+  - default path is direct write to NFS staging
+  - local scratch may be added behind config as an optimization, but must not be the source of truth
+
+#### Runtime model
+
+Use the existing `echo.prolog.sh` idea as the operational template.
+
+`Prolog`:
+
+- parse the job comment
+- if mode is `inband` or `both`, compute `storage_key`
+- create shared staging root and node subdirectory
+- persist node-local runtime state in a file such as `/run/repacss-power/${SLURM_JOB_ID}.env`
+- create/start a systemd unit such as:
+  - `repacss-power-ib@<storage_key>.service`
+- pass:
+  - `job_id`
+  - `storage_key`
+  - `hostname`
+  - `interval_ms`
+  - selected collectors
+  - shared output directory
+
+Integration rule:
+
+- power collection must integrate as its own Slurm helper scripts, not by merging into `echo.prolog.sh`
+- expected script layout:
+  - `shared/slurm/repacss-power.prolog.sh`
+  - `shared/slurm/repacss-power.epilog.sh`
+- the site `slurm.prolog` wrapper may call the power prolog with `|| true` so power startup failures do not block job launch
+- the compute-node epilog hook must likewise call the power epilog independently of ECHO-DVFS teardown
+
+`Epilog` on compute nodes:
+
+- stop the matching systemd unit
+- read the node-local state file created by `Prolog`
+- collect stop results from each collector
+- write:
+  - collector CSV files
+  - `node_status.json`
+  - `.done`
+
+`storage_key` lookup rule:
+
+- `Prolog` is the authoritative creator of `storage_key`
+- `Epilog` must not recompute `storage_key` from Slurm timestamps unless the state file is missing
+- primary lookup path is the node-local state file written by `Prolog`
+- fallback lookup may use the systemd unit instance name or Slurm job metadata only when the state file is unavailable
+
+`EpilogSlurmctld` on headnode:
+
+- unchanged role: one run per job
+- if mode includes IB:
+  - wait for expected node `.done` markers
+  - read per-node artifacts from NFS
+  - build aggregated IB summary
+- if mode includes OOB:
+  - run the existing OOB query path
+- if mode is `both`:
+  - merge OOB and IB into one unified export
+
+#### Systemd service shape
+
+Add a small runner that owns the lifetime of the selected P3 collectors.
+
+The service is responsible for:
+
+- reading collector selection and interval from environment or args
+- starting all requested/auto-detected collectors
+- keeping the process alive until stopped by `Epilog`
+- stopping collectors cleanly on SIGTERM
+- writing collector outputs to the node staging directory
+- writing a service-level status file such as `runner_status.json` if startup fails before collector output exists
+
+P4 should define one node-local runner process per job/node, not one service per collector.
+
+Recommended unit structure:
+
+- template unit:
+  - `repacss-power-ib@.service`
+- runner:
+  - Python module at `inband/runner.py`
+
+The systemd unit must run as a system service on the compute node, matching the existing Slurm Prolog operational model.
+
+Runner signal contract:
+
+- the runner must install a SIGTERM handler
+- SIGTERM sets a process-level stop flag and triggers orderly collector shutdown
+- the runner must stop all active collectors before exiting
+- the runner must flush any buffered state before exit
+- normal runner shutdown writes `runner_status.json` with a terminal state such as `complete` or `partial`
+- if `Epilog` cannot find `runner_status.json`, or systemd reports a non-zero unit exit, it must mark the node as `failed`
+- a forced or abnormal termination must still leave enough state for `Epilog` to write a failed or partial `node_status.json`
+
+#### P4 storage policy
+
+P4 uses shared/NFS staging as the only authoritative IB storage for live sampling and aggregation.
+
+Rules:
+
+- `ib_store_root` must be visible on compute nodes and headnode
+- compute-node service writes only its own `{hostname}/` subtree
+- headnode writes only job-level files such as:
+  - `manifest.json`
+  - `summary.json`
+- no compute node writes directly into another node’s subtree
+- no user directory is used as the primary live sampling destination
+
+Local spool policy:
+
+- default: collectors write directly to NFS staging
+- optional config later may allow:
+  - write to node-local temp
+  - `Epilog` copies to NFS before `.done`
+- even if local spool is enabled later, NFS remains the source of truth for aggregation
+
+#### P4 acceptance criteria
+
+Validate:
+
+- `Prolog` with `power:inband` starts the systemd unit
+- the service stays alive during job runtime
+- `Epilog` stops the unit cleanly
+- expected collector CSVs appear under the node staging directory
+- `node_status.json` and `.done` are written
+- `EpilogSlurmctld` reads staged artifacts and writes `summary.json`
+- aggregation still completes when some nodes never write `.done`, and those nodes are marked `timeout`
+- `power:both` runs IB aggregation and OOB query in one job-end flow
+- compute nodes do not require direct user-directory writes for live collection
+- unavailable collectors are recorded as partial/failed without blocking the whole workflow
 
 ## Migration Mapping
 

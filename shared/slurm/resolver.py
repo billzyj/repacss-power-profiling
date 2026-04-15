@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-import shlex
+import re
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from shared.errors import SlurmResolutionError
@@ -36,24 +36,80 @@ def _parse_slurm_epoch(raw: Optional[str]) -> Optional[datetime]:
     return datetime.fromtimestamp(int(raw))
 
 
-def fetch_job_comment(job_id: str, env: Optional[Dict[str, str]] = None) -> str:
-    """Resolve job comment from env or scontrol."""
+def _extract_scontrol_field(output: str, key: str) -> str:
+    pattern = rf"\b{re.escape(key)}=(.*?)(?= [A-Za-z][A-Za-z0-9_]*=|$)"
+    match = re.search(pattern, output)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def fetch_job_metadata(job_id: str, env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Resolve Slurm job metadata from env or one scontrol call."""
     env = env or os.environ
+    metadata: Dict[str, str] = {}
+    if not job_id:
+        return metadata
+
     comment = (env.get("SLURM_JOB_COMMENT") or "").strip()
     if comment:
-        return comment
-    if not job_id:
-        return ""
+        metadata["Comment"] = comment
+
+    start_time = (env.get("SLURM_JOB_START_TIME") or "").strip()
+    if start_time:
+        metadata["StartTime"] = start_time
+
+    if metadata.get("Comment") and metadata.get("StartTime"):
+        return metadata
 
     try:
         output = subprocess.check_output(["scontrol", "show", "job", "-o", job_id], text=True)
     except Exception:
-        return ""
+        return metadata
 
-    for token in shlex.split(output):
-        if token.startswith("Comment="):
-            return token.split("=", 1)[1]
-    return ""
+    if "Comment" not in metadata:
+        metadata["Comment"] = _extract_scontrol_field(output, "Comment")
+    if "StartTime" not in metadata:
+        metadata["StartTime"] = _extract_scontrol_field(output, "StartTime")
+    return metadata
+
+
+def parse_job_start_epoch(raw: Optional[str]) -> Optional[int]:
+    """Parse a Slurm start time string into an epoch integer."""
+    value = (raw or "").strip()
+    if not value or value in {"Unknown", "N/A", "None"}:
+        return None
+    if value.isdigit():
+        return int(value)
+
+    # Slurm commonly emits ISO-like timestamps such as:
+    #   2026-04-14T08:00:00
+    #   2026-04-14T08:00:00Z
+    # Parse these explicitly so the behavior stays stable across Python versions.
+    formats = [
+        ("%Y-%m-%dT%H:%M:%S", None),
+        ("%Y-%m-%dT%H:%M:%SZ", timezone.utc),
+        ("%Y-%m-%dT%H:%M:%S.%f", None),
+        ("%Y-%m-%dT%H:%M:%S.%fZ", timezone.utc),
+    ]
+    for pattern, tzinfo in formats:
+        try:
+            parsed = datetime.strptime(value, pattern)
+            if tzinfo is not None:
+                parsed = parsed.replace(tzinfo=tzinfo)
+            return int(parsed.timestamp())
+        except ValueError:
+            continue
+
+    try:
+        return int(datetime.fromisoformat(value).timestamp())
+    except ValueError:
+        return None
+
+
+def fetch_job_comment(job_id: str, env: Optional[Dict[str, str]] = None) -> str:
+    """Resolve job comment from env or scontrol."""
+    return fetch_job_metadata(job_id, env).get("Comment", "")
 
 
 def resolve_job_context_from_env(env: Optional[Dict[str, str]] = None) -> SlurmJobContext:
@@ -97,4 +153,3 @@ def resolve_job_context(job_id: Optional[str] = None, env: Optional[Dict[str, st
     raise SlurmResolutionError(
         "Offline/manual Slurm resolution is not implemented in P0-P2 without Slurm job env"
     )
-
