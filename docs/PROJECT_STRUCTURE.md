@@ -1,224 +1,186 @@
-# REPACSS Power Measurement - Project Structure
+# REPACSS Power Profiling - Project Structure
 
 ## Overview
 
-This document provides detailed technical architecture and development information for the REPACSS Power Measurement project.
+This document describes the target architecture and the current migration state of `repacss-power-profiling`.
 
-## Directory Structure
+The repository is moving away from the legacy `src/` monolith toward a domain-oriented structure with:
 
+- `shared/`
+- `oob/`
+- `inband/`
+- `cli/`
+- `tests/`
+
+The goal is to make the architecture align with the refactor plan:
+
+- `shared/` holds cross-domain contracts and utilities
+- `oob/` owns out-of-band query and export workflows
+- `inband/` owns Slurm-bound runtime sampling workflows
+- `cli/` exposes user-facing command entrypoints
+- `tests/` validates the refactored architecture at unit, integration, and end-to-end levels
+
+## Architecture Model
+
+### Primary Source Domains
+
+#### `shared/`
+
+`shared/` contains cross-domain building blocks that should not belong exclusively to OOB or In-band.
+
+Typical responsibilities:
+
+- configuration access
+- shared models and typed contracts
+- Slurm comment parsing and job-context resolution
+- common analysis helpers
+- export foundations
+- shared constants and utility helpers
+- common error types
+
+`shared/` is not a dumping ground. Anything backend-specific or runtime-specific should stay in `oob/` or `inband/`.
+
+#### `oob/`
+
+`oob/` is the out-of-band domain.
+
+Typical responsibilities:
+
+- OOB backend abstraction
+- direct MonSTer DB access
+- future MonSTer API backend
+- job-scoped OOB query flow
+- general metric query flow
+- headnode job-end Slurm handling for OOB
+
+OOB is the only domain that talks to external telemetry services in v1.
+
+#### `inband/`
+
+`inband/` is the in-band domain.
+
+Typical responsibilities:
+
+- collector interfaces
+- hardware-specific collectors such as `rapl`, `nvidia_smi`, and `rocm_smi`
+- compute-node runtime lifecycle
+- shared-filesystem staging
+- aggregation support
+- status/debug support for staged artifacts
+
+In-band is not primarily a manual CLI workflow.
+Its production execution model is Slurm-driven:
+
+- `Prolog`
+- `Epilog`
+- `EpilogSlurmctld`
+
+### Entry Layer
+
+#### `cli/`
+
+`cli/` is the program entry layer.
+
+It is not a fourth business domain.
+Its job is to expose user-facing commands over the underlying architecture.
+
+Current design direction:
+
+- OOB query and export workflows are the main CLI use case
+- In-band may expose limited debug/status commands
+- In-band runtime collection itself remains Slurm-bound, not CLI-driven
+
+### Test Layer
+
+#### `tests/`
+
+`tests/` is the validation layer.
+
+Recommended steady-state organization:
+
+```text
+tests/
+  unit/
+    shared/
+    oob/
+    inband/
+  integration/
+    oob/
+    inband/
+  e2e/
 ```
-repacss-power-measurement/
-├── LICENSE                    # Project license
-├── README.md                  # Main documentation and quick start
-├── docs/                      # Documentation directory
-│   ├── USAGE_GUIDE.md        # Detailed usage examples and troubleshooting
-│   ├── PROJECT_STRUCTURE.md   # This file - technical architecture
-│   └── _working/             # Temporary refactor planning artifacts
-│       └── refactor-plan.md  # Temporary mixed-language working plan, deleted before merge
-├── requirements.txt           # Python dependencies
-├── setup.py                   # Setup script for easy installation
-├── .gitignore                # Git ignore rules
-└── src/                      # Source code directory
-    ├── core/                 # Core infrastructure and utilities
-    │   ├── client.py         # Main client library
-    │   ├── database.py       # Database connection utilities
-    │   └── config.py         # Configuration management
-    ├── queries/              # All SQL query definitions
-    │   ├── compute/          # Compute nodes (H100 + Zen4) queries
-    │   │   ├── public.py     # Public schema queries
-    │   │   └── idrac.py      # iDRAC schema queries
-    │   └── infra/            # Infrastructure queries
-    │       ├── public.py     # Public schema queries
-    │       └── irc_pdu.py    # IRC and PDU queries
-    ├── scripts/              # Executable scripts and runners
-    │   ├── run_public_queries.py      # Main report generator
-    │   ├── run_h100_queries.py        # H100-specific runner
-    │   ├── run_node_level_queries.py  # Node-level analysis
-    │   └── run_rack_related_queries.py # Rack analysis
-    ├── examples/             # Example usage and demos
-    │   ├── basic_usage.py    # Comprehensive usage examples
-    │   └── test_connection.py # Connection testing
-    └── templates/            # Configuration templates
-        └── config_template.py # Template for configuration
+
+This structure mirrors both:
+
+- test depth
+- architectural ownership
+
+## Current Migration State
+
+The repository is in an intermediate state.
+
+### What Is Already Happening
+
+- new refactor work is being added under `shared/` and `oob/`
+- legacy Slurm OOB entrypoints are beginning to route into the new architecture
+- compatibility is still being preserved for existing imports and scripts where practical
+
+### What Still Exists Temporarily
+
+The legacy `src/` tree is still present.
+
+For now, it serves one or both of these purposes:
+
+- existing implementation not yet migrated
+- compatibility wrapper for old import paths and old entrypoints
+
+This is intentional during the refactor.
+`src/` should not be treated as the long-term architecture once the migration is complete.
+
+## Repository Layout
+
+### Target Steady-State Layout
+
+```text
+repacss-power-profiling/
+├── README.md
+├── docs/
+├── shared/
+├── oob/
+├── inband/
+├── cli/
+├── tests/
+└── src/   # temporary compatibility layer during migration
 ```
 
-## Core Components
+### Current Practical Rule
 
-### Main Client (`src/core/client.py`)
+When adding new refactor-era code:
 
-The main client library that provides:
-- SSH tunnel connection management
-- Database connection handling
-- Query execution methods
-- Power and temperature metric retrieval
-- Cluster summary calculations
+- prefer `shared/`, `oob/`, `inband/`, and `cli/`
+- only modify `src/` when preserving compatibility or migrating legacy behavior
 
-**Key Classes:**
-- `DatabaseConfig`: Database connection configuration
-- `SSHConfig`: SSH tunnel configuration  
-- `REPACSSPowerClient`: Main client class
+## Slurm Integration Placement
 
-**Key Methods:**
-- `connect()`: Establish SSH tunnel and database connection
-- `disconnect()`: Close connections
-- `get_computepower_metrics()`: Get power consumption data
-- `get_boardtemperature_metrics()`: Get temperature data
-- `get_idrac_cluster_summary()`: Get cluster-wide summaries
-- `execute_query()`: Execute custom SQL queries
+The Slurm hooks are split by responsibility.
 
-### Database Utilities (`src/core/database.py`)
+### OOB
 
-Database connection management utilities:
-- Multi-database connection handling
-- Connection pooling and management
-- Database-specific client creation
-- Connection cleanup and error handling
+OOB remains headnode-oriented and job-level.
 
-**Key Classes:**
-- `DatabaseConnectionManager`: Manages multiple database connections
+Expected placement:
 
-**Key Functions:**
-- `connect_to_database()`: Connect to a specific database
-- `connect_to_all_databases()`: Connect to all configured databases
-- `disconnect_all()`: Close all connections
-- `get_client()`: Get client for specific database
+- shared dispatcher logic in `shared/slurm/`
+- OOB-specific job-end handling in `oob/slurm/`
 
-### Configuration (`src/core/config.py`)
+### In-band
 
-Configuration management system:
-- Database connection settings
-- SSH tunnel parameters
-- Database schema mappings
-- Security credentials management
+In-band is compute-node-oriented and runtime-bound.
 
-**Supported Databases:**
-- `h100`: H100 cluster database (idrac schema)
-- `zen4`: ZEN4 cluster database (idrac schema)  
-- `infra`: Infrastructure database (irc, pdu schemas)
+Expected placement:
 
-### Query Collections (`src/queries/`)
-
-Organized query collections for different use cases:
-
-#### Compute Queries (`src/queries/compute/`)
-
-**Public Schema Queries (`public.py`)**
-- Power metrics definitions from `public.metrics_definition`
-- FQDD (Fully Qualified Device Descriptor) information
-- Metrics grouped by units and types
-- High-accuracy power metrics
-- Comprehensive device mapping
-
-**iDRAC Schema Queries (`idrac.py`)**
-- Recent power and temperature metrics
-- Node and cluster summaries
-- Time-range analysis queries
-- Power efficiency analysis
-- High power/temperature event detection
-- Unified API for power metrics with joins
-
-#### Infrastructure Queries (`src/queries/infra/`)
-
-**Public Schema Queries (`public.py`)**
-- Infrastructure metrics definitions
-- Compressor and airflow metrics
-- Run hours and system metrics
-- Infrastructure-specific queries
-
-**IRC/PDU Schema Queries (`irc_pdu.py`)**
-- PDU (Power Distribution Unit) power metrics
-- IRC (Infrastructure) temperature and humidity monitoring
-- Infrastructure efficiency analysis
-- Alert conditions (high power, temperature, low humidity)
-
-### Scripts (`src/scripts/`)
-
-#### Main Report Generator (`run_public_queries.py`)
-Comprehensive Excel report generator:
-- Multi-database power metrics collection
-- Excel file generation with multiple sheets
-- Metric data with cross-joins for human-readable names
-- Timestamped output files
-
-#### H100-Specific Runner (`run_h100_queries.py`)
-Advanced script for running queries across multiple databases:
-- Simultaneous multi-database connections
-- Metrics definition queries
-- Power analysis queries
-- Time range analysis
-
-#### Node-Level Analysis (`run_node_level_queries.py`)
-Node-specific analysis and visualization:
-- Individual node power analysis
-- Temperature monitoring
-- Power trend analysis
-- Node comparison reports
-
-#### Rack Analysis (`run_rack_related_queries.py`)
-Rack-level infrastructure analysis:
-- Rack power consumption
-- Cooling efficiency analysis
-- Infrastructure monitoring
-
-### Examples (`src/examples/`)
-
-#### Basic Usage (`basic_usage.py`)
-Comprehensive demonstration of client capabilities:
-- Single database operations
-- Multi-database comparisons
-- Available metrics discovery
-- Recent metrics retrieval
-- Cluster summaries
-- Custom query execution
-
-#### Test Connection (`test_connection.py`)
-Simple connection testing script:
-- SSH tunnel verification
-- Database connectivity test
-- Table existence checks
-- Basic query execution
-
-## Database Schemas
-
-### H100 and ZEN4 Databases
-- **public**: Metrics definitions and metadata
-- **idrac**: iDRAC power and temperature data (default)
-- **slurm**: Slurm job and resource management
-
-### INFRA Database
-- **public**: Infrastructure metrics definitions
-- **irc**: Infrastructure monitoring (temperature, humidity, airflow)
-- **pdu**: Power Distribution Unit data (default)
-
-## Security Features
-
-- SSH tunnel encryption for database connections
-- Configuration file excluded from version control
-- Private key authentication
-- Connection isolation per database
-- Automatic connection cleanup
-
-## Error Handling
-
-- Robust SSH tunnel management
-- Database connection error recovery
-- Query execution error handling
-- Graceful disconnection on errors
-- Comprehensive logging
-
-## Dependencies
-
-- `psycopg2-binary`: PostgreSQL adapter
-- `paramiko`: SSH protocol implementation
-- `sshtunnel`: SSH tunnel management
-
-## Development Workflow
-
-1. **Setup**: Run `python setup.py`
-2. **Configure**: Edit `src/core/config.py` with credentials
-3. **Test**: Run `python src/examples/test_connection.py`
-4. **Develop**: Use `src/examples/basic_usage.py` as reference
-5. **Deploy**: Ensure `src/core/config.py` is in `.gitignore`
+- collector lifecycle and compute-node hook logic in `inband/`
+- aggregation and staged artifact processing under `inband/`
 
 ## Temporary Planning Artifacts
 
@@ -226,49 +188,24 @@ Simple connection testing script:
 
 Rules:
 
-1. Files in `docs/_working/` may be used by both Codex and Claude Code during active refactor work.
-2. Temporary planning files may use mixed Chinese and English when that helps collaboration.
-3. Stable project documentation must remain in English.
-4. Durable decisions must be copied into English documentation before the refactor is finalized.
-5. Temporary planning files must be deleted before merge or long-term publication.
+1. Files in `docs/_working/` may be shared between the user, Codex, and Claude Code during active refactor work.
+2. Temporary planning files may use mixed Chinese and English if that improves collaboration speed.
+3. Stable repository documentation must remain in English.
+4. Durable architectural decisions must be moved into `README.md` or `docs/*`.
+5. Temporary planning artifacts must be deleted before finalization of the refactor branch.
 
-## File Naming Conventions
+## Migration Principle
 
-- **Core files**: `core/client.py`, `core/database.py`, `core/config.py`
-- **Configuration**: `templates/config_template.py` → `core/config.py`
-- **Examples**: `examples/basic_usage.py`, `examples/test_connection.py`
-- **Query collections**: `queries/{system}/{schema}.py`
-- **Scripts**: `scripts/run_{purpose}.py`
+The migration sequence is:
 
-## Architecture Principles
+1. establish the new architecture
+2. move real behavior into the new domains
+3. keep legacy paths working where helpful
+4. remove the legacy shell only after the new layout is fully validated
 
-### Separation of Concerns
-- **Core**: Infrastructure and utilities
-- **Queries**: SQL query definitions organized by system
-- **Scripts**: Executable applications
-- **Examples**: Learning and testing materials
-- **Templates**: Configuration templates
+This means the repository may temporarily contain both:
 
-### Modularity
-- Each directory has a clear, single purpose
-- Related functionality is grouped together
-- Dependencies are minimized between modules
-- Clear interfaces between components
+- new domain-oriented modules
+- old compatibility-oriented modules
 
-### Maintainability
-- Consistent naming conventions
-- Clear documentation and examples
-- Proper error handling and logging
-- Version control best practices
-
-## Best Practices
-
-- Always use virtual environments
-- Never commit `src/core/config.py`
-- Test connections before running queries
-- Use appropriate schemas for each database
-- Handle connection cleanup in try/finally blocks
-- Use parameterized queries for security
-- Follow the established directory structure
-- Add proper error handling to new features
-- Update documentation when adding new functionality
+That overlap is expected during the transition and should be resolved only after the new architecture becomes the canonical implementation.

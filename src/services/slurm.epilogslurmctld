@@ -4,15 +4,14 @@ set -u
 LOGFILE="${MONSTER_POWER_LOGFILE:-/var/log/slurm/epilogslurmctld.log}"
 
 PYTHON="${MONSTER_POWER_PYTHON:-/opt/repacss-power-profiling/.venv/bin/python}"
-SCRIPT="${MONSTER_POWER_SCRIPT:-/opt/repacss-power-profiling/src/services/slurm_power_query.py}"
 DELAY="${MONSTER_POWER_DELAY_SECONDS:-10}"
-
-KEYWORD="power_profiling"
 
 # Output layout: POWER_BASE/{userid}/{job_id}/
 POWER_BASE="${MONSTER_POWER_BASE:-/mnt/SHARED-AREA/power_reports}"
 
 DEBUG="${MONSTER_POWER_DEBUG:-0}"   # set to 1 to enable verbose logs
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 ts() { date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S'; }
 log(){ printf "%s %s\n" "$(ts)" "$*" >> "$LOGFILE" 2>/dev/null || true; }
@@ -26,20 +25,8 @@ if [[ -z "$RUN_AS" ]]; then log "skip reason=no_SLURM_JOB_USER"; exit 0; fi
 
 dlog "invoked job_id=$JOB_ID user=$RUN_AS nodes=${SLURM_JOB_NODELIST:-} stdout=${SLURM_JOB_STDOUT:-} stderr=${SLURM_JOB_STDERR:-} comment_env=${SLURM_JOB_COMMENT:-<unset>}"
 
-# Fetch comment reliably from ctld
-COMMENT="$(scontrol show job -o "$JOB_ID" 2>/dev/null | sed -n 's/.*Comment=\([^ ]*\).*/\1/p')"
-COMMENT="${COMMENT:-}"
-dlog "job_id=$JOB_ID comment_scontrol=${COMMENT:-<empty>} keyword=$KEYWORD"
-
-# Gate by comment (exact match)
-if [[ "$COMMENT" != "$KEYWORD" ]]; then
-  dlog "skip reason=comment_mismatch comment='$COMMENT'"
-  exit 0
-fi
-
 # Validate python + script (local on headnode)
 if [[ ! -x "$PYTHON" ]]; then log "skip reason=python_not_executable path='$PYTHON'"; exit 0; fi
-if [[ ! -r "$SCRIPT" ]]; then log "skip reason=script_not_readable path='$SCRIPT'"; exit 0; fi
 
 # Output: POWER_BASE/{userid}/{job_id}/ (raw_power.csv, power_timeseries.pdf, energy_ring.pdf, meta.txt)
 OUTDIR="${POWER_BASE}/${RUN_AS}/${JOB_ID}"
@@ -67,18 +54,19 @@ fi
   echo "timestamp=$(ts)"
 } > "${OUTDIR}/meta.txt" 2>/dev/null || true
 
-dlog "run start python='$PYTHON' script='$SCRIPT' outdir='$OUTDIR'"
+dlog "run start python='$PYTHON' module='shared.slurm.dispatcher' outdir='$OUTDIR'"
 
 # Matplotlib: writable cache dir (avoids /etc/slurm/.config/matplotlib) and no broken font paths
 export MPLCONFIGDIR="${MONSTER_POWER_MPLCONFIGDIR:-/tmp/mplconfig-slurm}"
 mkdir -p "$MPLCONFIGDIR" >>"$LOGFILE" 2>&1 || true
 
 env \
+  PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" \
   MONSTER_POWER_JOB_ID="$JOB_ID" \
   MONSTER_POWER_NODELIST="${SLURM_JOB_NODELIST:-}" \
   MONSTER_POWER_OUTDIR="$OUTDIR" \
   MPLCONFIGDIR="$MPLCONFIGDIR" \
-  "$PYTHON" "$SCRIPT" >> "$LOGFILE" 2>&1 || true
+  "$PYTHON" -m shared.slurm.dispatcher >> "$LOGFILE" 2>&1 || true
 
 dlog "run end job_id=$JOB_ID outdir='$OUTDIR'"
 exit 0

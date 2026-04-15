@@ -4,7 +4,52 @@ Power measurement from out-of-band and in-band solutions for the REPACSS cluster
 
 ## Overview
 
-This project provides a Python client to connect to the REPACSS TimescaleDB and query power-related metrics from iDRAC (Integrated Dell Remote Access Controller) and infrastructure monitoring systems. The client supports multiple databases, each containing different schemas with power monitoring data.
+This project is being refactored into a major-version architecture with two first-class power domains:
+
+- `Out-of-Band (OOB)`: database/API-backed post-job and offline power queries
+- `In-Band (IB)`: Slurm-driven runtime sampling on compute nodes
+
+The long-term source layout is organized around three primary implementation domains plus entrypoint and test layers:
+
+- `shared/`: cross-domain contracts, config, Slurm helpers, common analysis/export foundations
+- `oob/`: OOB query semantics, backend adapters, and headnode job-end workflows
+- `inband/`: IB collectors, runtime lifecycle, staging, and aggregation
+- `cli/`: user-facing program entrypoints, primarily for OOB query/export workflows
+- `tests/`: unit, integration, and end-to-end validation
+
+IB is not designed as a standalone manual collection workflow. Its primary execution model is Slurm-driven (`Prolog + Epilog + EpilogSlurmctld`), while the top-level CLI is primarily an OOB query/export surface plus limited debug/status helpers.
+
+## Current Migration Status
+
+The repository is currently in transition from the legacy `src/` monolith to the new domain-oriented layout above.
+
+Current expectations:
+
+- new refactor work should prefer `shared/`, `oob/`, `inband/`, and `cli/`
+- `src/` is temporarily retained as a compatibility layer while the migration is still in progress
+- `src/` will be reduced and eventually removed after the new architecture is fully validated
+
+## Architecture Layout
+
+Planned steady-state structure:
+
+```text
+repacss-power-profiling/
+├── shared/      # cross-domain foundations
+├── oob/         # out-of-band query and export logic
+├── inband/      # in-band collectors and Slurm-bound runtime flow
+├── cli/         # user-facing command entrypoints
+├── tests/
+│   ├── unit/
+│   │   ├── shared/
+│   │   ├── oob/
+│   │   └── inband/
+│   ├── integration/
+│   │   ├── oob/
+│   │   └── inband/
+│   └── e2e/
+└── src/         # temporary compatibility layer during migration
+```
 
 ## Features
 
@@ -22,14 +67,14 @@ This project provides a Python client to connect to the REPACSS TimescaleDB and 
 - **Power consumption validation** comparing compute nodes vs PDU measurements
 - **Smart power estimation** for unmeasured components (switches, AMD nodes, etc.)
 
-## Quick Start (New CLI)
+## Quick Start (Refactored CLI)
 
 ### 1. Install
 
 ```bash
 git clone <repository-url>
-cd repacss-power-measurement
-python -m venv .venv
+cd repacss-power-profiling
+python3 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
@@ -43,7 +88,7 @@ pip install -r requirements.txt
 
 ```bash
 # Step 1: Create your .env file from template
-python setup.py
+python3 setup.py
 
 # Step 2: Edit the generated file with your credentials
 # File location: src/database/config/.env
@@ -72,17 +117,14 @@ REPACSS_SSH_KEY_PATH=/path/to/your/private/key
 ### 3. Test
 
 ```bash
-# Test configuration
-python -m src.cli config
+# Show effective configuration
+python3 -m cli config show
 
-# Test database connection
-python -m src.cli connection --database h100
+# Validate configuration
+python3 -m cli config test
 
-# Test all databases
-python -m src.cli databases
-
-# Or test with example script
-python examples/test_db_connection.py
+# Backward-compatible legacy entrypoint still works during migration
+python3 -m src.cli config show
 ```
 
 ### 3a. Fresh Clone Smoke Test
@@ -91,56 +133,35 @@ Use this path when validating the repository on a remote machine after a fresh `
 This smoke test is intended to avoid DB or SSH credentials and should remain the minimum validation path for refactor work.
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python tests/run_tests.py --type unit
+python3 tests/run_tests.py --type unit
 ```
 
 ### 4. Use
 
 ```bash
-# Power analysis (system or single node)
-python -m src.cli analyze --database h100
-python -m src.cli analyze --database h100 --hostname rpg-93-1 --hours 6
+# General OOB query
+python3 -m cli oob query --hostname rpg-93-1 --start "2025-01-01 00:00:00" --end "2025-01-01 01:00:00"
 
-# Energy calculation (single node)
-python -m src.cli energy --database h100 --hostname rpg-93-1 --hours 24
+# General OOB query with file output
+python3 -m cli oob query --hostname rpc-91-2 --start "2025-01-01 00:00:00" --end "2025-01-01 01:00:00" --output output/query.csv --format csv
 
-# PUE calculation (cluster-wide)
-python -m src.cli pue --hours 24
-python -m src.cli pue --start-time "2025-01-01 00:00:00" --end-time "2025-01-02 00:00:00"
+# Manual OOB job export
+python3 -m cli oob job --job-id 96597 --user kalebuch --nodelist rpg-93-6 --start "2026-04-13 00:00:00" --end "2026-04-13 01:00:00" --outdir output/job-96597
 
-# Daily PUE report (Excel)
-python -m src.cli pue-daily --start-day 2025-07-17
-python -m src.cli pue-daily --start-day 2025-01-01 --end-day 2025-06-30 --output output/pue/pue_daily.xlsx
-
-# Rack-level COP analysis (Excel)
-python -m src.cli rack-cop --hours 168
-python -m src.cli rack-cop --start-time "2025-01-01 00:00:00" --end-time "2025-01-08 00:00:00"
-
-# Daily rack-level COP report (Excel)
-python -m src.cli rack-cop-daily --start-day 2025-01-01
-python -m src.cli rack-cop-daily --start-day 2025-01-01 --end-day 2025-06-30 --output output/rack/rack_cop_daily.xlsx
-
-# Rack analysis (infra)
-python -m src.cli rack --rack 97 --hours 24
-
-# Excel report
-python -m src.cli excel --databases h100 zen4 infra
-
-# Rack report
-python -m src.cli rack-report --rack 97
-
-# Custom report
-python -m src.cli custom --format csv --output report.csv
+# Generic export surface (currently OOB-backed in P0-P2)
+python3 -m cli export --job 96597 --user kalebuch --nodelist rpg-93-6 --start "2026-04-13 00:00:00" --end "2026-04-13 01:00:00" --output output/export-96597
 ```
 
 ## Available Interfaces
 
-- **CLI (recommended)**: `python -m src.cli ...`
-- **Legacy scripts**: `src/scripts/run_compute_power_queries.py` (H100/ZEN4)
-- **Programmatic APIs**: import from `services/`, `analysis/`, `queries/`
+- **CLI (primary user interface)**: `python3 -m cli ...`
+- **Legacy compatibility CLI**: `python3 -m src.cli ...`
+- **OOB programmatic APIs**: moving into `oob/` and `shared/`
+- **IB runtime entrypoints**: Slurm `Prolog`, `Epilog`, and `EpilogSlurmctld`
+- **Legacy scripts and legacy modules**: temporarily retained under `src/` for compatibility during migration
 
 ## Refactor Workflow
 
@@ -153,30 +174,34 @@ Rules:
 3. Any durable decisions from the temporary plan must be moved into `README.md` or `docs/*`.
 4. Remove the temporary plan file before the refactor branch is finalized.
 
+Refactor direction for this repository:
+
+- primary source domains are `shared/`, `oob/`, and `inband/`
+- `cli/` is the program entry layer rather than a fourth business domain
+- `tests/` mirrors behavior and architecture validation, not just file layout
+- `src/` remains temporary until the new architecture fully replaces the legacy implementation
+
 ### CLI Commands
 
 ```bash
-# Analysis commands
-python -m src.cli analyze --database h100 --hostname rpg-93-1
-python -m src.cli energy --database h100 --hostname rpg-93-1 --hours 24
-python -m src.cli pue --hours 24
-python -m src.cli rack --rack 97 --hours 24
-
-# Reporting commands
-python -m src.cli pue-daily --start-day 2025-07-17
-python -m src.cli rack-cop --hours 168
-python -m src.cli rack-cop-daily --start-day 2025-01-01
-
-# Reporting commands  
-python -m src.cli excel --databases h100 zen4 infra
-python -m src.cli rack-report --rack 97
-python -m src.cli custom --format csv --output report.csv
-
-# Testing commands
-python -m src.cli config
-python -m src.cli connection --database h100
-python -m src.cli databases
+python3 -m cli --help
+python3 -m cli config show
+python3 -m cli config test
+python3 -m cli oob query --help
+python3 -m cli oob job --help
+python3 -m cli export --help
 ```
+
+Current CLI scope in P0-P2:
+
+- `config show`
+- `config test`
+- `oob query`
+- `oob job`
+- `export`
+
+The top-level CLI is currently OOB-focused.
+In-band runtime collection remains Slurm-driven and is not yet exposed as a primary manual CLI workflow.
 
 ### Analysis Types
 

@@ -42,6 +42,12 @@ def compute_energy_kwh_for_hostname(df, unit: str, hostname: str, start_time: st
     Returns:
         Energy in kWh as a float (0.0 if insufficient data)
     """
+    df = df.copy()
+    if "value" not in df.columns and "power_watts" in df.columns:
+        df["value"] = df["power_watts"]
+    if "hostname" not in df.columns:
+        df["hostname"] = hostname
+
     required_cols = {"timestamp", "hostname", "value"}
     if not required_cols.issubset(df.columns):
         missing = required_cols - set(df.columns)
@@ -129,6 +135,12 @@ class EnergyCalculator:
         Returns:
             Energy in kWh as a float (0.0 if insufficient data)
         """
+        df = df.copy()
+        if "value" not in df.columns and "power_watts" in df.columns:
+            df["value"] = df["power_watts"]
+        if "hostname" not in df.columns:
+            df["hostname"] = hostname
+
         required_cols = {"timestamp", "hostname", "value"}
         if not required_cols.issubset(df.columns):
             missing = required_cols - set(df.columns)
