@@ -1,0 +1,2 @@
+# Minimal dependencies for the no-credentials unit-test smoke path.
+pytest>=7.0.0

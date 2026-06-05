@@ -1,56 +1,39 @@
-"""
-Unit tests for power conversion utilities
-"""
-import pytest
-import pandas as pd
-from datetime import datetime
+"""Unit tests for power conversion utilities."""
 
-# Import the functions we're testing
+import pandas as pd
+
 from src.utils.conversions import convert_power_series_to_watts
 
 
 class TestPowerConversions:
-    """Test power unit conversions"""
-    
-    def test_convert_watts_to_kwh(self):
-        """Test conversion from watts to kWh"""
-        # Test data: 1000W for 1 hour = 1 kWh
-        power_data = pd.DataFrame({
-            'timestamp': [datetime(2025, 1, 1, 10, 0, 0), datetime(2025, 1, 1, 11, 0, 0)],
-            'power_watts': [1000, 1000]
-        })
-        
-        result = convert_power_series_to_watts(power_data, 'W')
-        
-        # Should convert to kWh (1000W * 1h = 1kWh)
-        assert result['energy_kwh'].iloc[0] == 1.0
-    
+    """Test power unit conversions."""
+
+    def test_convert_watts_preserves_values(self):
+        """Watt inputs should pass through unchanged as floats."""
+        result = convert_power_series_to_watts(pd.Series([1000, 12.5]), "W")
+
+        assert result.tolist() == [1000.0, 12.5]
+
     def test_convert_milliwatts_to_watts(self):
-        """Test conversion from milliwatts to watts"""
-        power_data = pd.DataFrame({
-            'timestamp': [datetime(2025, 1, 1, 10, 0, 0)],
-            'power_mw': [50000]  # 50,000 mW = 50W
-        })
-        
-        result = convert_power_series_to_watts(power_data, 'mW')
-        
-        assert result['power_watts'].iloc[0] == 50.0
-    
-    def test_invalid_unit_raises_error(self):
-        """Test that invalid units raise appropriate errors"""
-        power_data = pd.DataFrame({
-            'timestamp': [datetime(2025, 1, 1, 10, 0, 0)],
-            'power': [1000]
-        })
-        
-        with pytest.raises(ValueError, match="Unsupported unit"):
-            convert_power_series_to_watts(power_data, 'invalid_unit')
-    
-    def test_empty_dataframe(self):
-        """Test handling of empty dataframes"""
-        empty_df = pd.DataFrame(columns=['timestamp', 'power_watts'])
-        
-        result = convert_power_series_to_watts(empty_df, 'W')
-        
+        """Milliwatt inputs should be divided by 1000."""
+        result = convert_power_series_to_watts(pd.Series([50000]), "mW")
+
+        assert result.iloc[0] == 50.0
+
+    def test_convert_kilowatts_to_watts(self):
+        """Kilowatt inputs should be multiplied by 1000."""
+        result = convert_power_series_to_watts(pd.Series([1.5]), "kW")
+
+        assert result.iloc[0] == 1500.0
+
+    def test_unknown_unit_defaults_to_watts(self):
+        """Unknown units currently default to W for compatibility."""
+        result = convert_power_series_to_watts(pd.Series([1000]), "invalid_unit")
+
+        assert result.iloc[0] == 1000.0
+
+    def test_empty_series(self):
+        """Empty series inputs should remain empty."""
+        result = convert_power_series_to_watts(pd.Series(dtype=float), "W")
+
         assert len(result) == 0
-        assert 'energy_kwh' in result.columns

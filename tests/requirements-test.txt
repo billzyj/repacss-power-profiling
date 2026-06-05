@@ -12,7 +12,6 @@ pandas>=1.5.0
 numpy>=1.21.0
 
 # Mocking and test utilities
-unittest-mock>=1.0.0
 freezegun>=1.2.0  # Time mocking
 
 # Coverage reporting
@@ -31,7 +30,7 @@ paramiko>=2.10.0
 sshtunnel>=0.4.0
 
 # CLI testing
-click-testing>=0.1.0
+# click.testing is provided by click, which is installed through requirements.txt.
 
 # Data validation
 pandera>=0.17.0  # DataFrame validation

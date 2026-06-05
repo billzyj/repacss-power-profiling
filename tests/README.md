@@ -99,8 +99,11 @@ pytest -s
 
 ### Environment Setup
 ```bash
-# Install test dependencies
-pip install pytest pytest-cov pytest-mock
+# Install minimal unit-test smoke dependencies
+pip install -r requirements.txt -r tests/requirements-unit.txt
+
+# Install full optional test tooling
+pip install -r requirements.txt -r tests/requirements-test.txt
 
 # Set test environment variables
 export REPACSS_TEST_MODE=true
@@ -197,7 +200,7 @@ jobs:
         with:
           python-version: '3.9'
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -r tests/requirements-test.txt
       - name: Run unit tests
         run: pytest tests/unit/ --cov=src
       - name: Run integration tests

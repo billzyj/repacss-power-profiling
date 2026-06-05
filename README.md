@@ -150,7 +150,7 @@ This smoke test is intended to avoid DB or SSH credentials and should remain the
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r tests/requirements-unit.txt
 python3 tests/run_tests.py --type unit
 ```
 
