@@ -46,12 +46,30 @@ def get_compute_metrics_with_joins(metric_id: str, hostname: str = None, start_t
     if where_conditions:
         where_clause = "WHERE " + " AND ".join(where_conditions)
     
-    # Build LIMIT clause
-    limit_clause = ""
-    # Only apply limit if no time range is specified (both start_time and end_time are None)
     if start_time is None and end_time is None:
-        limit_clause = f"LIMIT {limit}"
-    
+        return f"""
+        WITH limited AS (
+            SELECT
+                p.timestamp,
+                n.hostname,
+                s.source,
+                f.fqdd,
+                p.value,
+                m.units
+            FROM idrac.{table_name} p
+            LEFT JOIN public.nodes n ON p.nodeid = n.nodeid
+            LEFT JOIN public.source s ON p.source = s.id
+            LEFT JOIN public.fqdd f ON p.fqdd = f.id
+            LEFT JOIN public.metrics_definition m ON LOWER(m.metric_id) = LOWER('{metric_id}')
+            {where_clause}
+            ORDER BY p.timestamp DESC
+            LIMIT {limit}
+        )
+        SELECT *
+        FROM limited
+        ORDER BY timestamp ASC;
+        """
+
     return f"""
     SELECT 
         p.timestamp,
@@ -66,7 +84,5 @@ def get_compute_metrics_with_joins(metric_id: str, hostname: str = None, start_t
     LEFT JOIN public.fqdd f ON p.fqdd = f.id
     LEFT JOIN public.metrics_definition m ON LOWER(m.metric_id) = LOWER('{metric_id}')
     {where_clause}
-    ORDER BY p.timestamp ASC
-    {limit_clause};
+    ORDER BY p.timestamp ASC;
     """
-

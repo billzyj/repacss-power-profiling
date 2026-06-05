@@ -26,6 +26,10 @@ def show_config():
     click.echo(f"ssh_port: {config.ssh_port}")
     click.echo(f"ssh_username: {config.ssh_username}")
     click.echo(f"ssh_key_path: {config.ssh_private_key_path or '<system default>'}")
+    click.echo(f"slurm_rest_host: {config.slurm_rest_host or '<not configured>'}")
+    click.echo(f"slurm_rest_port: {config.slurm_rest_port}")
+    click.echo(f"slurm_rest_user: {config.slurm_rest_user or '<not configured>'}")
+    click.echo(f"slurm_rest_headnode: {config.slurm_rest_headnode or '<not configured>'}")
     click.echo(f"available_databases: {', '.join(config.databases)}")
 
 
@@ -39,4 +43,3 @@ def test_config():
             click.echo(f"- {issue}")
         raise SystemExit(1)
     click.echo("Configuration validation passed.")
-

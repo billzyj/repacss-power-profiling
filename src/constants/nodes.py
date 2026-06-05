@@ -71,3 +71,11 @@ RACK_97_COMPUTE_NODES = [
     'rpc-97-16', 'rpc-97-17', 'rpc-97-18', 'rpc-97-19', 'rpc-97-20'
 ]
 RACK_97_PDU_NODES = ['pdu-97-1', 'pdu-97-2', 'pdu-97-3', 'pdu-97-4']
+
+# Backward-compatible aliases for legacy code paths that used "PD" naming.
+RACK_91_PD_NODES = RACK_91_PDU_NODES
+RACK_92_PD_NODES = RACK_92_PDU_NODES
+RACK_93_PD_NODES = RACK_93_PDU_NODES
+RACK_94_PD_NODES = RACK_94_PDU_NODES
+RACK_95_PD_NODES = RACK_95_PDU_NODES
+RACK_96_PD_NODES = RACK_96_PDU_NODES

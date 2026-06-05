@@ -38,9 +38,25 @@ def get_irc_metrics_with_joins(metric_id: str, hostname: str = None, start_time:
     if where_conditions:
         where_clause = "WHERE " + " AND ".join(where_conditions)
 
-    limit_clause = ""
     if start_time is None and end_time is None:
-        limit_clause = f"LIMIT {limit}"
+        return f"""
+        WITH limited AS (
+            SELECT
+                m.timestamp,
+                n.hostname,
+                m.value,
+                md.units
+            FROM irc.{table_name} m
+            JOIN public.nodes n ON m.nodeid = n.nodeid
+            LEFT JOIN public.metrics_definition md ON LOWER(md.metric_id) = LOWER('{metric_id}')
+            {where_clause}
+            ORDER BY m.timestamp DESC
+            LIMIT {limit}
+        )
+        SELECT *
+        FROM limited
+        ORDER BY timestamp ASC;
+        """
 
     return f"""
     SELECT 
@@ -52,8 +68,7 @@ def get_irc_metrics_with_joins(metric_id: str, hostname: str = None, start_time:
     JOIN public.nodes n ON m.nodeid = n.nodeid
     LEFT JOIN public.metrics_definition md ON LOWER(md.metric_id) = LOWER('{metric_id}')
     {where_clause}
-    ORDER BY m.timestamp ASC
-    {limit_clause};
+    ORDER BY m.timestamp ASC;
     """
 
 
@@ -92,9 +107,24 @@ def get_pdu_metrics_with_joins(hostname: str = None, start_time: str = None, end
     if where_conditions:
         where_clause = "WHERE " + " AND ".join(where_conditions)
 
-    limit_clause = ""
     if start_time is None and end_time is None:
-        limit_clause = f"LIMIT {limit}"
+        return f"""
+        WITH limited AS (
+            SELECT
+                m.timestamp,
+                n.hostname,
+                m.value,
+                'W' as units
+            FROM pdu.pdu m
+            JOIN public.nodes n ON m.nodeid = n.nodeid
+            {where_clause}
+            ORDER BY m.timestamp DESC
+            LIMIT {limit}
+        )
+        SELECT *
+        FROM limited
+        ORDER BY timestamp ASC;
+        """
 
     return f"""
     SELECT 
@@ -105,7 +135,5 @@ def get_pdu_metrics_with_joins(hostname: str = None, start_time: str = None, end
     FROM pdu.pdu m
     JOIN public.nodes n ON m.nodeid = n.nodeid
     {where_clause}
-    ORDER BY m.timestamp ASC
-    {limit_clause};
+    ORDER BY m.timestamp ASC;
     """
-

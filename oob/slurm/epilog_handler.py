@@ -167,9 +167,21 @@ def save_csv(
     return True
 
 
-def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
+def _prepare_time_series_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     if raw_df.empty or "timestamp" not in raw_df.columns or "value" not in raw_df.columns:
-        return False
+        return pd.DataFrame()
+    df = raw_df.copy()
+    local_tz = datetime.now().astimezone().tzinfo
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    if df["timestamp"].dt.tz is None:
+        df["timestamp"] = df["timestamp"].dt.tz_localize("UTC").dt.tz_convert(local_tz)
+    else:
+        df["timestamp"] = df["timestamp"].dt.tz_convert(local_tz)
+    df = df.dropna(subset=["timestamp"])
+    return df
+
+
+def _load_plotting():
     try:
         import matplotlib
 
@@ -183,24 +195,40 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
             apply_paper_style,
         )
     except ImportError:
-        return False
-    apply_paper_style()
-    df = raw_df.copy()
-    local_tz = datetime.now().astimezone().tzinfo
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    if df["timestamp"].dt.tz is None:
-        df["timestamp"] = df["timestamp"].dt.tz_localize("UTC").dt.tz_convert(local_tz)
-    else:
-        df["timestamp"] = df["timestamp"].dt.tz_convert(local_tz)
-    df = df.dropna(subset=["timestamp"])
+        return None
+    return {
+        "mdates": mdates,
+        "plt": plt,
+        "METRIC_ID_TO_DISPLAY": METRIC_ID_TO_DISPLAY,
+        "POWER_DISTRIBUTION_TIME_SERIES_COLORS": POWER_DISTRIBUTION_TIME_SERIES_COLORS,
+        "TIME_SERIES_GPU_FQDD_COLORS": TIME_SERIES_GPU_FQDD_COLORS,
+        "apply_paper_style": apply_paper_style,
+    }
+
+
+def plot_single_node_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
+    """Plot a single-node time series from raw OOB rows."""
+    df = _prepare_time_series_df(raw_df)
     if df.empty:
         return False
+    hosts = df["hostname"].dropna().unique().tolist() if "hostname" in df.columns else []
+    if len(hosts) > 1:
+        raise ValueError("plot_single_node_time_series received rows for multiple hostnames")
+    plotting = _load_plotting()
+    if plotting is None:
+        return False
+    plotting["apply_paper_style"]()
+    mdates = plotting["mdates"]
+    plt = plotting["plt"]
+    metric_labels = plotting["METRIC_ID_TO_DISPLAY"]
+    metric_colors = plotting["POWER_DISTRIBUTION_TIME_SERIES_COLORS"]
+    gpu_colors = plotting["TIME_SERIES_GPU_FQDD_COLORS"]
     fig, ax = plt.subplots(figsize=(10, 5))
     for metric in df["metric"].unique():
         sub_all = df[df["metric"] == metric]
         unit_metric = sub_all["units"].iloc[0] if "units" in sub_all.columns and len(sub_all) else "W"
-        display_label = METRIC_ID_TO_DISPLAY.get(metric, metric)
-        color = POWER_DISTRIBUTION_TIME_SERIES_COLORS.get(display_label, "#95a5a6")
+        display_label = metric_labels.get(metric, metric)
+        color = metric_colors.get(display_label, "#95a5a6")
         if metric == "PowerConsumption" and "fqdd" in df.columns:
             fqdd_list = sub_all["fqdd"].dropna().unique().tolist()
             for index, fqdd in enumerate(fqdd_list):
@@ -208,7 +236,7 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
                 if sub.empty:
                     continue
                 sub["power_w"] = convert_power_series_to_watts(sub["value"], unit_metric)
-                ax.plot(sub["timestamp"], sub["power_w"], label=f"GPU ({fqdd})", color=TIME_SERIES_GPU_FQDD_COLORS[index % len(TIME_SERIES_GPU_FQDD_COLORS)], alpha=0.8)
+                ax.plot(sub["timestamp"], sub["power_w"], label=f"GPU ({fqdd})", color=gpu_colors[index % len(gpu_colors)], alpha=0.8)
         else:
             sub = sub_all.sort_values("timestamp").copy()
             sub["power_w"] = convert_power_series_to_watts(sub["value"], unit_metric)
@@ -225,6 +253,148 @@ def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return True
+
+
+def plot_multi_node_time_series_aggregate(raw_df: pd.DataFrame, path: Path) -> bool:
+    """Plot job-level total power by summing all nodes for each metric/timestamp."""
+    total_df = build_multi_node_time_series_total(raw_df)
+    if total_df.empty:
+        return False
+    plotting = _load_plotting()
+    if plotting is None:
+        return False
+    plotting["apply_paper_style"]()
+    mdates = plotting["mdates"]
+    plt = plotting["plt"]
+    metric_labels = plotting["METRIC_ID_TO_DISPLAY"]
+    metric_colors = plotting["POWER_DISTRIBUTION_TIME_SERIES_COLORS"]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for metric in total_df["metric"].unique():
+        grouped = total_df[total_df["metric"] == metric].sort_values("timestamp")
+        display_label = metric_labels.get(metric, metric)
+        if grouped.empty:
+            continue
+        ax.plot(
+            grouped["timestamp"],
+            grouped["total_power_w"],
+            label=f"{display_label} total",
+            color=metric_colors.get(display_label, "#95a5a6"),
+            alpha=0.85,
+        )
+    ax.set_xlabel("Time (local)", fontsize=18, weight="bold")
+    ax.set_ylabel("Total Power (W)", fontsize=18, weight="bold")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=16, frameon=True)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M", tz=total_df["timestamp"].dt.tz))
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=30, ha="right")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return True
+
+
+def build_multi_node_time_series_total(raw_df: pd.DataFrame) -> pd.DataFrame:
+    """Build the job-level total-power time series used by aggregate plots."""
+    df = _prepare_time_series_df(raw_df)
+    if df.empty or "hostname" not in df.columns:
+        return pd.DataFrame(columns=["timestamp", "metric", "total_power_w", "node_count"])
+    rows = []
+    for metric in df["metric"].dropna().unique():
+        sub_all = df[df["metric"] == metric].copy()
+        unit_metric = sub_all["units"].iloc[0] if "units" in sub_all.columns and len(sub_all) else "W"
+        sub_all["power_w"] = convert_power_series_to_watts(sub_all["value"], unit_metric)
+        grouped = (
+            sub_all.groupby(["timestamp", "metric"], as_index=False)
+            .agg(total_power_w=("power_w", "sum"), node_count=("hostname", "nunique"))
+            .sort_values(["timestamp", "metric"])
+        )
+        rows.append(grouped)
+    if not rows:
+        return pd.DataFrame(columns=["timestamp", "metric", "total_power_w", "node_count"])
+    return pd.concat(rows, ignore_index=True).sort_values(["timestamp", "metric"]).reset_index(drop=True)
+
+
+def save_multi_node_time_series_total_csv(raw_df: pd.DataFrame, path: Path) -> bool:
+    """Save aggregate job-level total-power time series as CSV."""
+    total_df = build_multi_node_time_series_total(raw_df)
+    if total_df.empty:
+        return False
+    out = total_df.copy()
+    out["timestamp"] = out["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S%z")
+    out["units"] = "W"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(path, index=False)
+    return True
+
+
+def plot_multi_node_time_series_per_node(raw_df: pd.DataFrame, path: Path) -> bool:
+    """Plot one line per node/metric for multi-node debug views."""
+    df = _prepare_time_series_df(raw_df)
+    if df.empty or "hostname" not in df.columns:
+        return False
+    plotting = _load_plotting()
+    if plotting is None:
+        return False
+    plotting["apply_paper_style"]()
+    mdates = plotting["mdates"]
+    plt = plotting["plt"]
+    metric_labels = plotting["METRIC_ID_TO_DISPLAY"]
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    for (hostname, metric), sub_all in df.groupby(["hostname", "metric"], dropna=True):
+        sub = sub_all.sort_values("timestamp").copy()
+        if sub.empty:
+            continue
+        unit_metric = sub["units"].iloc[0] if "units" in sub.columns and len(sub) else "W"
+        display_label = metric_labels.get(metric, metric)
+        sub["power_w"] = convert_power_series_to_watts(sub["value"], unit_metric)
+        ax.plot(sub["timestamp"], sub["power_w"], label=f"{hostname} {display_label}", alpha=0.55, linewidth=1.0)
+    ax.set_xlabel("Time (local)", fontsize=18, weight="bold")
+    ax.set_ylabel("Power (W)", fontsize=18, weight="bold")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=9, frameon=True)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M", tz=df["timestamp"].dt.tz))
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=30, ha="right")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return True
+
+
+def plot_multi_node_time_series_per_node_files(raw_df: pd.DataFrame, out_dir: Path) -> List[Path]:
+    """Write one single-node time-series PDF per hostname."""
+    df = _prepare_time_series_df(raw_df)
+    if df.empty or "hostname" not in df.columns:
+        return []
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written: List[Path] = []
+    for hostname in sorted(df["hostname"].dropna().unique()):
+        node_df = df[df["hostname"] == hostname].copy()
+        if node_df.empty:
+            continue
+        path = out_dir / f"{hostname}_timeseries.pdf"
+        if plot_single_node_time_series(node_df, path):
+            written.append(path)
+    return written
+
+
+def plot_time_series(raw_df: pd.DataFrame, path: Path) -> bool:
+    """Compatibility wrapper for existing callers.
+
+    Single-node inputs use the single-node plot. Multi-node inputs produce the
+    aggregate job-level total at the requested path.
+    """
+    if raw_df.empty or "hostname" not in raw_df.columns:
+        return plot_single_node_time_series(raw_df, path)
+    hosts = raw_df["hostname"].dropna().unique().tolist()
+    if len(hosts) <= 1:
+        return plot_single_node_time_series(raw_df, path)
+    return plot_multi_node_time_series_aggregate(raw_df, path)
 
 
 def plot_pie(pie_segments: Dict[str, float], path: Path, job_id: Optional[str] = None) -> bool:
@@ -248,8 +418,8 @@ def plot_pie(pie_segments: Dict[str, float], path: Path, job_id: Optional[str] =
     values = [pie_segments[label] for label in labels]
     colors = [POWER_DISTRIBUTION_RING_COLORS.get(label, "#95a5a6") for label in labels]
     total_kwh = sum(values)
-    fig, ax = plt.subplots(figsize=(8, 8))
-    _, _, autotexts = create_ring_with_smart_labels(
+    fig, ax = plt.subplots(figsize=(10, 8))
+    wedges, _, autotexts = create_ring_with_smart_labels(
         ax,
         values,
         labels,
@@ -260,6 +430,17 @@ def plot_pie(pie_segments: Dict[str, float], path: Path, job_id: Optional[str] =
         startangle=90,
     )
     set_pie_text_color(autotexts, colors, values, labels)
+    legend_labels = [f"{label}: {value:.3f} kWh" for label, value in zip(labels, values)]
+    ax.legend(
+        wedges,
+        legend_labels,
+        title="Components",
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        fontsize=12,
+        title_fontsize=13,
+        frameon=True,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -275,6 +456,10 @@ def handle_oob_job(context: SlurmJobContext, out_dir: Optional[Path] = None) -> 
 
     csv_path = out_dir / "raw_power.csv"
     ts_path = out_dir / "power_timeseries.pdf"
+    ts_total_path = out_dir / "power_timeseries_total.pdf"
+    ts_total_csv_path = out_dir / "power_timeseries_total.csv"
+    ts_by_node_path = out_dir / "power_timeseries_by_node.pdf"
+    ts_nodes_dir = out_dir / "power_timeseries_nodes"
     pie_path = out_dir / "energy_ring.pdf"
 
     backend = MonsterDBBackend()
@@ -293,7 +478,14 @@ def handle_oob_job(context: SlurmJobContext, out_dir: Optional[Path] = None) -> 
         energy_gpu_per_fqdd=energy_gpu_per_fqdd,
         is_h100=any(node.lower().startswith("rpg") for node in context.nodes),
     )
-    plot_time_series(raw_df, ts_path)
+    hosts = raw_df["hostname"].dropna().unique().tolist() if not raw_df.empty and "hostname" in raw_df.columns else []
+    if len(hosts) > 1:
+        save_multi_node_time_series_total_csv(raw_df, ts_total_csv_path)
+        plot_multi_node_time_series_aggregate(raw_df, ts_total_path)
+        plot_multi_node_time_series_per_node(raw_df, ts_by_node_path)
+        plot_multi_node_time_series_per_node_files(raw_df, ts_nodes_dir)
+    else:
+        plot_single_node_time_series(raw_df, ts_path)
     plot_pie(pie_segments, pie_path, job_id=context.job_id)
     return out_dir
 

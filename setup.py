@@ -11,21 +11,31 @@ from pathlib import Path
 
 
 def create_env_file():
-    """Create .env file from template if it doesn't exist"""
+    """Create the preferred root .env file from legacy config or template."""
     template_path = Path("src/database/config/env.template")
-    env_path = Path("src/database/config/.env")
-    
-    if env_path.exists():
-        print("✓ .env file already exists")
+    preferred_env_path = Path(".env")
+    legacy_env_path = Path("src/database/config/.env")
+
+    if preferred_env_path.exists():
+        print("✓ Root .env file already exists")
         return
-    
+
+    if legacy_env_path.exists():
+        try:
+            shutil.copy(legacy_env_path, preferred_env_path)
+            print("✓ Migrated legacy src/database/config/.env to root .env")
+            print("⚠️  Preferred config path is now .env at the repository root")
+        except Exception as e:
+            print(f"❌ Error migrating legacy .env file: {e}")
+        return
+
     if not template_path.exists():
         print("❌ env.template not found")
         return
-    
+
     try:
-        shutil.copy(template_path, env_path)
-        print("✓ Created .env file from template")
+        shutil.copy(template_path, preferred_env_path)
+        print("✓ Created root .env file from template")
         print("⚠️  Please edit .env with your actual database and SSH credentials")
     except Exception as e:
         print(f"❌ Error creating .env file: {e}")
@@ -35,21 +45,22 @@ def create_env_file():
 
 def check_dependencies():
     """Check if required dependencies are installed"""
-    required_packages = [
-        "psycopg2-binary",
-        "paramiko", 
-        "sshtunnel",
-        "pandas",
-        "openpyxl",
-        "click",
-        "matplotlib"
-    ]
+    required_packages = {
+        "psycopg2-binary": "psycopg2",
+        "paramiko": "paramiko",
+        "sshtunnel": "sshtunnel",
+        "pandas": "pandas",
+        "openpyxl": "openpyxl",
+        "click": "click",
+        "matplotlib": "matplotlib",
+        "requests": "requests",
+    }
     
     missing_packages = []
     
-    for package in required_packages:
+    for package, module_name in required_packages.items():
         try:
-            __import__(package.replace("-", "_"))
+            __import__(module_name)
             print(f"✓ {package}")
         except ImportError:
             missing_packages.append(package)
@@ -90,7 +101,7 @@ def check_gitignore():
     with open(gitignore_path, 'r') as f:
         content = f.read()
     
-    # Check for .env files
+    # Check for root and legacy fallback .env files
     env_ok = ".env" in content and "src/database/config/.env" in content
     if env_ok:
         print("✓ .env files are in .gitignore")
@@ -107,17 +118,17 @@ def check_gitignore():
 
 
 def check_new_structure():
-    """Check if new directory structure exists"""
+    """Check if the refactored directory structure exists."""
     required_dirs = [
-        "src/cli",
-        "src/cli/commands", 
-        "src/analysis",
-        "src/reporting",
-        "src/utils",
+        "cli",
+        "shared",
+        "oob",
+        "inband",
+        "src",
         "src/database/config",
         "tests/unit",
         "tests/integration",
-        "tests/fixtures"
+        "tests/fixtures",
     ]
     
     missing_dirs = []
@@ -136,22 +147,18 @@ def check_new_structure():
 
 
 def check_new_modules():
-    """Check if new modules exist"""
+    """Check if core refactor-era modules exist."""
     required_files = [
+        "cli/main.py",
+        "cli/config.py",
+        "cli/oob.py",
+        "cli/export.py",
+        "shared/config/config.py",
+        "shared/slurm/dispatcher.py",
+        "oob/query_manager.py",
+        "oob/slurm/epilog_handler.py",
         "src/cli/main.py",
-        "src/cli/commands/analyze.py",
-        "src/cli/commands/report.py", 
-        "src/cli/commands/test.py",
-        "src/analysis/power.py",
-        "src/analysis/energy.py",
-        "src/utils/conversions.py",
-        "src/utils/data_processing.py",
-        "src/reporting/excel.py",
-        "src/reporting/formats.py",
-        "src/database/config/config.py",
-        "src/database/connection_pool.py",
-        "src/queries/manager.py",
-        "src/scripts/run_compute_power_queries.py"
+        "src/database/config/env.template",
     ]
     
     missing_files = []
@@ -169,13 +176,13 @@ def check_new_modules():
 
 
 def test_cli():
-    """Test if CLI works"""
+    """Smoke test the current refactored CLI."""
     try:
         import subprocess
         result = subprocess.run([
-            sys.executable, "-m", "src.cli", "--help"
+            sys.executable, "-m", "cli", "config", "show"
         ], capture_output=True, text=True, timeout=10)
-        
+
         if result.returncode == 0:
             print("✓ CLI is working")
             return True
@@ -222,16 +229,16 @@ def main():
         print("✅ Enhanced setup completed successfully!")
         print("\n📝 Next steps:")
         print("1. Edit .env with your database and SSH credentials")
-        print("2. Test your connection: python -m src.cli test connection")
-        print("3. Run power analysis: python -m src.cli analyze --database h100")
-        print("4. Generate reports: python -m src.cli report excel")
-        
+        print("2. Show effective config: python -m cli config show")
+        print("3. Validate configuration: python -m cli config test")
+        print("4. Explore OOB commands: python -m cli oob --help")
+
         if cli_ok:
             print("\n🎉 CLI is working! You can now use:")
-            print("  python -m src.cli --help")
-            print("  python -m src.cli analyze --help")
-            print("  python -m src.cli report --help")
-            print("  python -m src.cli test --help")
+            print("  python -m cli --help")
+            print("  python -m cli config show")
+            print("  python -m cli oob --help")
+            print("  python -m cli export --help")
     else:
         print("⚠️  Setup completed with issues")
         if not structure_ok:

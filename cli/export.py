@@ -9,7 +9,7 @@ import click
 
 from cli.oob import _build_manual_context
 from oob.slurm.epilog_handler import handle_oob_job
-from shared.slurm.resolver import resolve_job_context_from_env
+from shared.slurm.resolver import resolve_job_context, resolve_job_context_from_env
 
 
 @click.command(name="export")
@@ -26,13 +26,16 @@ def export_command(job_id: Optional[str], user: str, nodelist: Optional[str], st
         context = resolve_job_context_from_env()
     else:
         missing = [name for name, value in (("job", job_id), ("nodelist", nodelist), ("start", start), ("end", end)) if not value]
-        if missing:
+        if job_id and set(missing) == {"nodelist", "start", "end"}:
+            context = resolve_job_context(job_id)
+        elif missing:
             raise click.ClickException(
-                "Current export support is OOB-only and requires --job, --nodelist, --start, and --end; "
+                "Current export support is OOB-only and requires either --job alone for Slurm REST lookup, "
+                "or --job, --nodelist, --start, and --end; "
                 f"missing: {', '.join(missing)}."
             )
-        context = _build_manual_context(job_id, user, nodelist, start, end)
+        else:
+            context = _build_manual_context(job_id, user, nodelist, start, end)
 
     output_dir = handle_oob_job(context, outdir)
     click.echo(f"Export written under {output_dir}")
-

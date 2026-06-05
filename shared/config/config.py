@@ -36,6 +36,21 @@ class SSHConfig:
 
 
 @dataclass
+class SlurmRESTConfig:
+    """Slurm REST API configuration."""
+
+    host: str
+    port: int
+    user: str
+    headnode: str
+    jobs_path: str
+    nodes_path: str
+    job_path: str
+    db_job_path: str
+    openapi_path: str
+
+
+@dataclass
 class Config:
     """Configuration with environment variable support."""
 
@@ -52,6 +67,16 @@ class Config:
     ssh_private_key_path: str = None
     ssh_passphrase: str = None
     ssh_keepalive_interval: int = None
+
+    slurm_rest_host: str = None
+    slurm_rest_port: int = None
+    slurm_rest_user: str = None
+    slurm_rest_headnode: str = None
+    slurm_rest_jobs_path: str = None
+    slurm_rest_nodes_path: str = None
+    slurm_rest_job_path: str = None
+    slurm_rest_db_job_path: str = None
+    slurm_rest_openapi_path: str = None
 
     _database_schemas: dict = None
 
@@ -82,6 +107,34 @@ class Config:
 
         ssh_keepalive_env = os.getenv("REPACSS_SSH_KEEPALIVE")
         self.ssh_keepalive_interval = int((ssh_keepalive_env or "").strip() or (self.ssh_keepalive_interval or 60))
+
+        self.slurm_rest_host = os.getenv("REPACSS_SLURM_REST_HOST", self.slurm_rest_host or "").strip()
+        self.slurm_rest_port = int(os.getenv("REPACSS_SLURM_REST_PORT", self.slurm_rest_port or 6820))
+        self.slurm_rest_user = os.getenv("REPACSS_SLURM_REST_USER", self.slurm_rest_user or "").strip()
+        self.slurm_rest_headnode = os.getenv(
+            "REPACSS_SLURM_REST_HEADNODE",
+            self.slurm_rest_headnode or "",
+        ).strip()
+        self.slurm_rest_jobs_path = os.getenv(
+            "REPACSS_SLURM_REST_JOBS_PATH",
+            self.slurm_rest_jobs_path or "/slurm/v0.0.42/jobs/",
+        )
+        self.slurm_rest_nodes_path = os.getenv(
+            "REPACSS_SLURM_REST_NODES_PATH",
+            self.slurm_rest_nodes_path or "/slurm/v0.0.42/nodes/",
+        )
+        self.slurm_rest_job_path = os.getenv(
+            "REPACSS_SLURM_REST_JOB_PATH",
+            self.slurm_rest_job_path or "/slurm/v0.0.42/job/",
+        )
+        self.slurm_rest_db_job_path = os.getenv(
+            "REPACSS_SLURM_REST_DB_JOB_PATH",
+            self.slurm_rest_db_job_path or "/slurmdb/v0.0.42/job/",
+        )
+        self.slurm_rest_openapi_path = os.getenv(
+            "REPACSS_SLURM_REST_OPENAPI_PATH",
+            self.slurm_rest_openapi_path or "/openapi/v3",
+        )
 
         if self._database_schemas is None:
             self._database_schemas = {
@@ -119,6 +172,19 @@ class Config:
             keepalive_interval=self.ssh_keepalive_interval,
         )
 
+    def get_slurm_rest_config(self) -> SlurmRESTConfig:
+        return SlurmRESTConfig(
+            host=self.slurm_rest_host,
+            port=self.slurm_rest_port,
+            user=self.slurm_rest_user,
+            headnode=self.slurm_rest_headnode,
+            jobs_path=self.slurm_rest_jobs_path,
+            nodes_path=self.slurm_rest_nodes_path,
+            job_path=self.slurm_rest_job_path,
+            db_job_path=self.slurm_rest_db_job_path,
+            openapi_path=self.slurm_rest_openapi_path,
+        )
+
     def get_available_schemas(self, database_name: str) -> List[str]:
         return self._database_schemas.get(database_name, {}).get("schemas", ["public"])
 
@@ -137,6 +203,16 @@ class Config:
             issues.append("SSH hostname not configured")
         if self.ssh_private_key_path and not Path(self.ssh_private_key_path).exists():
             issues.append(f"SSH private key file not found: {self.ssh_private_key_path}")
+        return issues
+
+    def validate_slurm_rest_config(self) -> List[str]:
+        issues = []
+        if not self.slurm_rest_host:
+            issues.append("Slurm REST host not configured")
+        if not self.slurm_rest_user:
+            issues.append("Slurm REST user not configured")
+        if not self.slurm_rest_headnode:
+            issues.append("Slurm REST headnode not configured")
         return issues
 
     def is_valid(self) -> bool:

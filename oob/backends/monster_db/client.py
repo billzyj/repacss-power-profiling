@@ -47,10 +47,12 @@ class REPACSSPowerClient:
                 "-o",
                 "ExitOnForwardFailure=yes",
                 "-o",
+                "BatchMode=yes",
+                "-o",
                 f"ServerAliveInterval={self.ssh_config.keepalive_interval}",
             ]
             if self.ssh_config.private_key_path:
-                ssh_cmd += ["-i", self.ssh_config.private_key_path]
+                ssh_cmd += ["-o", "IdentitiesOnly=yes", "-i", self.ssh_config.private_key_path]
 
             destination = (
                 f"{self.ssh_config.username}@{self.ssh_config.hostname}"
@@ -139,4 +141,3 @@ class REPACSSPowerClient:
             "memory_utilization_percent",
         ]
         return [dict(zip(columns, row)) for row in results]
-

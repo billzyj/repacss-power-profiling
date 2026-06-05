@@ -36,12 +36,13 @@ class QueryManager:
             node_type, query_func, db, schema = self._get_node_type_and_query_func(hostname)
             metrics = self._get_metrics_for_node_type(node_type, db, schema)
             all_data = []
+            limit_recent_only = start_time is None and end_time is None
             for metric in metrics:
                 try:
                     if node_type in ["pdu"]:
-                        query = query_func(hostname, start_time, end_time)
+                        query = query_func(hostname, start_time, end_time, limit=limit)
                     else:
-                        query = query_func(metric, hostname, start_time, end_time)
+                        query = query_func(metric, hostname, start_time, end_time, limit=limit)
                     with get_pooled_connection(db, schema) as client:
                         df = pd.read_sql_query(query, client.db_connection)
                     if not df.empty:
@@ -51,7 +52,17 @@ class QueryManager:
                     logger.warning("Error querying metric %s for %s: %s", metric, hostname, exc)
                     continue
             if all_data:
-                return pd.concat(all_data, ignore_index=True)
+                combined = pd.concat(all_data, ignore_index=True)
+                if limit_recent_only and limit > 0 and len(combined) > limit:
+                    if "timestamp" in combined.columns:
+                        ts = pd.to_datetime(combined["timestamp"], errors="coerce", utc=True)
+                        combined = combined.assign(_timestamp_sort_key=ts)
+                        combined = combined.sort_values("_timestamp_sort_key", ascending=False, na_position="last").head(limit)
+                        combined = combined.sort_values("_timestamp_sort_key", ascending=True, na_position="last")
+                        combined = combined.drop(columns=["_timestamp_sort_key"])
+                    else:
+                        combined = combined.head(limit)
+                return combined.reset_index(drop=True)
             return pd.DataFrame()
         except Exception as exc:
             logger.error("Error getting power metrics for %s: %s", hostname, exc)

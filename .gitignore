@@ -22,7 +22,6 @@ wheels/
 MANIFEST
 
 # Virtual environments
-.env
 .venv
 env/
 venv/
@@ -47,7 +46,10 @@ ehthumbs.db
 Thumbs.db
 
 # Configuration files with sensitive data
+.env
+src/database/config/.env
 src/core/config.py
+*.conf
 
 # Logs
 *.log
@@ -62,7 +64,3 @@ output/
 *.xlsx
 *.xls
 power_metrics_report*.xlsx
-# Environment variables with sensitive data
-.env
-src/database/config/.env
-*.conf

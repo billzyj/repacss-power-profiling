@@ -13,7 +13,7 @@ from oob.backends.monster_db.backend import MonsterDBBackend
 from oob.slurm.epilog_handler import summarize_job_power
 from shared.errors import OOBBackendError
 from shared.models import SlurmJobContext
-from shared.slurm.resolver import expand_nodelist, resolve_job_context_from_env
+from shared.slurm.resolver import expand_nodelist, resolve_job_context, resolve_job_context_from_env
 
 
 def _parse_datetime(raw: Optional[str]) -> Optional[datetime]:
@@ -134,12 +134,16 @@ def export_job(job_id: Optional[str], user: str, nodelist: Optional[str], start_
         context = resolve_job_context_from_env()
     else:
         missing = [name for name, value in (("job-id", job_id), ("nodelist", nodelist), ("start", start_time), ("end", end_time)) if not value]
-        if missing:
+        if job_id and set(missing) == {"nodelist", "start", "end"}:
+            context = resolve_job_context(job_id)
+        elif missing:
             raise click.ClickException(
-                "Manual job query requires --job-id, --nodelist, --start, and --end; "
+                "Manual job query requires either --job-id alone for Slurm REST lookup, "
+                "or --job-id, --nodelist, --start, and --end; "
                 f"missing: {', '.join(missing)}."
             )
-        context = _build_manual_context(job_id, user, nodelist, start_time, end_time)
+        else:
+            context = _build_manual_context(job_id, user, nodelist, start_time, end_time)
 
     backend = MonsterDBBackend()
     try:

@@ -8,8 +8,10 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from shared.config import config
 from shared.errors import SlurmResolutionError
 from shared.models import SlurmJobContext
+from shared.slurm.rest_client import SlurmRESTClient
 
 try:
     import hostlist
@@ -146,10 +148,72 @@ def resolve_job_context_from_env(env: Optional[Dict[str, str]] = None) -> SlurmJ
 
 
 def resolve_job_context(job_id: Optional[str] = None, env: Optional[Dict[str, str]] = None) -> SlurmJobContext:
-    """Resolve Slurm job context, preferring env and falling back to scontrol."""
+    """Resolve Slurm job context, preferring env and falling back to Slurm REST."""
     env = env or os.environ
     if env.get("SLURM_JOB_ID"):
         return resolve_job_context_from_env(env)
-    raise SlurmResolutionError(
-        "Offline/manual Slurm resolution is not implemented in P0-P2 without Slurm job env"
+    if not job_id:
+        raise SlurmResolutionError("job_id is required when Slurm job env is unavailable")
+    return resolve_job_context_from_rest(job_id)
+
+
+def resolve_job_context_from_rest(job_id: str, client: Optional[SlurmRESTClient] = None) -> SlurmJobContext:
+    """Build a SlurmJobContext from SlurmDBD through slurmrestd."""
+    slurm_config = config.get_slurm_rest_config()
+    issues = config.validate_slurm_rest_config()
+    if issues:
+        raise SlurmResolutionError("; ".join(issues))
+
+    rest_client = client or SlurmRESTClient(slurm_config)
+    job = rest_client.get_job(job_id, from_database=True)
+    if not job:
+        raise SlurmResolutionError(f"No Slurm job found for job_id={job_id}")
+
+    nodelist = str(job.get("nodes") or job.get("node_list") or "").strip()
+    nodes = expand_nodelist(nodelist)
+    start_time = _parse_rest_time(_nested_get(job, "time", "start") or job.get("start_time"))
+    end_time = _parse_rest_time(_nested_get(job, "time", "end") or job.get("end_time"))
+    user = _extract_rest_user(job)
+
+    if not user:
+        raise SlurmResolutionError(f"Slurm REST job {job_id} did not include a user")
+    if not nodelist or not nodes:
+        raise SlurmResolutionError(f"Slurm REST job {job_id} did not include nodes")
+    if start_time is None or end_time is None:
+        raise SlurmResolutionError(f"Slurm REST job {job_id} did not include start/end times")
+
+    return SlurmJobContext(
+        job_id=str(job.get("job_id") or job.get("id") or job_id),
+        user=user,
+        nodelist=nodelist,
+        nodes=nodes,
+        start_time=start_time,
+        end_time=end_time,
+        comment=str(job.get("comment") or ""),
+        cluster_name=str(job.get("cluster") or "") or None,
     )
+
+
+def _nested_get(data: Dict[str, object], *keys: str):
+    current = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _parse_rest_time(raw: object) -> Optional[datetime]:
+    if raw in (None, "", 0, "0"):
+        return None
+    if isinstance(raw, (int, float)):
+        return datetime.fromtimestamp(int(raw))
+    epoch = parse_job_start_epoch(str(raw))
+    return datetime.fromtimestamp(epoch) if epoch is not None else None
+
+
+def _extract_rest_user(job: Dict[str, object]) -> str:
+    raw_user = job.get("user") or job.get("user_name")
+    if isinstance(raw_user, dict):
+        return str(raw_user.get("name") or raw_user.get("user_name") or "").strip()
+    return str(raw_user or "").strip()

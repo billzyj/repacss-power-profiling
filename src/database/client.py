@@ -80,6 +80,8 @@ class REPACSSPowerClient:
                 # Fail fast if port-forward can't be established
                 '-o',
                 'ExitOnForwardFailure=yes',
+                '-o',
+                'BatchMode=yes',
                 # Keep the tunnel alive
                 '-o',
                 f'ServerAliveInterval={self.ssh_config.keepalive_interval}',
@@ -87,7 +89,7 @@ class REPACSSPowerClient:
 
             # Optional explicit identity file; if not set, rely on ssh-agent/default keys/ssh config.
             if self.ssh_config.private_key_path:
-                ssh_cmd += ['-i', self.ssh_config.private_key_path]
+                ssh_cmd += ['-o', 'IdentitiesOnly=yes', '-i', self.ssh_config.private_key_path]
 
             destination = (
                 f'{self.ssh_config.username}@{self.ssh_config.hostname}'
@@ -423,4 +425,4 @@ class REPACSSPowerClient:
         """
         
         results = self.execute_query(query)
-        return [row[0] for row in results] if results else [] 
+        return [row[0] for row in results] if results else []
