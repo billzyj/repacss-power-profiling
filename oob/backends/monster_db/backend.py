@@ -21,7 +21,7 @@ def _format_local_ts_with_offset(dt: datetime) -> str:
     ts = dt.timestamp()
     local = datetime.fromtimestamp(ts).astimezone()
     offset = local.strftime("%z")
-    return dt.strftime("%Y-%m-%d %H:%M:%S") + (offset[:3] if len(offset) >= 3 else "")
+    return local.strftime("%Y-%m-%d %H:%M:%S") + (offset[:3] if len(offset) >= 3 else "")
 
 
 def _node_db_and_metrics(node_id: str) -> Optional[Tuple[str, str, List[str]]]:

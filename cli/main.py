@@ -4,6 +4,7 @@
 import click
 
 from .config import config_group
+from .eguage import eguage_group
 from .export import export_command
 from .ib import ib_group
 from .oob import oob_group
@@ -16,6 +17,7 @@ def cli():
 
 
 cli.add_command(config_group)
+cli.add_command(eguage_group)
 cli.add_command(ib_group)
 cli.add_command(oob_group)
 cli.add_command(export_command)

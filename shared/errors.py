@@ -19,3 +19,7 @@ class OOBBackendError(REPACSSPowerError):
 
 class InbandCollectorError(REPACSSPowerError):
     """Raised when an in-band collector fails."""
+
+
+class EGaugeError(REPACSSPowerError):
+    """Raised when the eGauge connector fails."""

@@ -36,7 +36,7 @@ def create_env_file():
     try:
         shutil.copy(template_path, preferred_env_path)
         print("✓ Created root .env file from template")
-        print("⚠️  Please edit .env with your actual database and SSH credentials")
+        print("⚠️  Please edit .env with your actual database, SSH, and eGauge credentials")
     except Exception as e:
         print(f"❌ Error creating .env file: {e}")
 
@@ -121,6 +121,7 @@ def check_new_structure():
     """Check if the refactored directory structure exists."""
     required_dirs = [
         "cli",
+        "eguage",
         "shared",
         "oob",
         "inband",
@@ -151,8 +152,12 @@ def check_new_modules():
     required_files = [
         "cli/main.py",
         "cli/config.py",
+        "cli/eguage.py",
         "cli/oob.py",
         "cli/export.py",
+        "eguage/client.py",
+        "eguage/config.py",
+        "eguage/README.md",
         "shared/config/config.py",
         "shared/slurm/dispatcher.py",
         "oob/query_manager.py",
@@ -228,10 +233,11 @@ def main():
     if all([structure_ok, modules_ok, deps_ok, gitignore_ok]):
         print("✅ Enhanced setup completed successfully!")
         print("\n📝 Next steps:")
-        print("1. Edit .env with your database and SSH credentials")
+        print("1. Edit .env with your database, SSH, and eGauge credentials")
         print("2. Show effective config: python -m cli config show")
         print("3. Validate configuration: python -m cli config test")
         print("4. Explore OOB commands: python -m cli oob --help")
+        print("5. Verify the eGauge connector: python -m cli eguage probe")
 
         if cli_ok:
             print("\n🎉 CLI is working! You can now use:")

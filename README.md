@@ -13,6 +13,7 @@ The long-term source layout is organized around three primary implementation dom
 
 - `shared/`: cross-domain contracts, config, Slurm helpers, common analysis/export foundations
 - `oob/`: OOB query semantics, backend adapters, and headnode job-end workflows
+- `eguage/`: SSH-tunneled eGauge Web API connector for facility-level telemetry
 - `inband/`: IB collectors, runtime lifecycle, staging, and aggregation
 - `cli/`: user-facing program entrypoints, primarily for OOB query/export workflows
 - `tests/`: unit, integration, and end-to-end validation
@@ -51,6 +52,7 @@ Planned steady-state structure:
 repacss-power-profiling/
 ├── shared/      # cross-domain foundations
 ├── oob/         # out-of-band query and export logic
+├── eguage/      # eGauge Web API connector
 ├── inband/      # in-band collectors and Slurm-bound runtime flow
 ├── cli/         # user-facing command entrypoints
 ├── tests/
@@ -68,6 +70,7 @@ repacss-power-profiling/
 ## Features
 
 - **Secure SSH tunnel connection** to TimescaleDB using `sshtunnel`
+- **Secure SSH tunnel connection** to private eGauge Web API endpoints through a jump host
 - **Multi-database support** for different cluster databases
 - Query power consumption, temperature, and utilization metrics from various schemas
 - Support for time-range queries and aggregations
@@ -97,7 +100,7 @@ pip install -r requirements.txt
 
 **Setup Flow:**
 1. **Template → .env**: `setup.py` copies `env.template` to create your personal `.env` file
-2. **Edit credentials**: You fill in your actual database and SSH information
+2. **Edit credentials**: You fill in your actual database, SSH, and eGauge information
 3. **Secure storage**: `.env` file is automatically protected from git commits
 
 ```bash
@@ -107,7 +110,7 @@ python3 setup.py
 # Step 2: Edit the generated file with your credentials
 # Preferred file location: .env
 # Legacy fallback location during migration: src/database/config/.env
-# Edit with your actual database host, username, password, SSH details, etc.
+# Edit with your actual database host, username, password, SSH details, and eGauge details.
 ```
 
 **What to Edit in `.env`:**
@@ -121,6 +124,12 @@ REPACSS_DB_PASSWORD=your_database_password
 REPACSS_SSH_HOSTNAME=your.ssh.host.com
 REPACSS_SSH_USERNAME=your_ssh_username
 REPACSS_SSH_KEY_PATH=/path/to/your/private/key
+
+# eGauge API Settings (replace with your actual values)
+REPACSS_EGAUGE_HOST=192.168.4.81
+REPACSS_EGAUGE_USERNAME=your_eguage_username
+REPACSS_EGAUGE_PASSWORD=your_eguage_password
+REPACSS_EGAUGE_SSH_HOSTNAME=narumuu.ttu.edu
 ```
 
 **SSH Key Requirements:**
@@ -137,6 +146,9 @@ python3 -m cli config show
 
 # Validate configuration
 python3 -m cli config test
+
+# Verify the eGauge connector
+python3 -m cli eguage probe
 
 # Backward-compatible legacy entrypoint still works during migration
 python3 -m src.cli config show
@@ -168,6 +180,12 @@ python3 -m cli oob job --job-id 96597 --user kalebuch --nodelist rpg-93-6 --star
 
 # Generic export surface (currently OOB-backed in P0-P2)
 python3 -m cli export --job 96597 --user kalebuch --nodelist rpg-93-6 --start "2026-04-13 00:00:00" --end "2026-04-13 01:00:00" --output output/export-96597
+
+# Probe the eGauge tunnel and API auth path
+python3 -m cli eguage probe
+
+# Fetch current eGauge register data
+python3 -m cli eguage registers --reg all --output output/eguage-registers.json
 
 # Debug-only in-band collector probe
 python3 -m cli ib probe
@@ -209,6 +227,8 @@ Refactor direction for this repository:
 python3 -m cli --help
 python3 -m cli config show
 python3 -m cli config test
+python3 -m cli eguage probe --help
+python3 -m cli eguage registers --help
 python3 -m cli ib probe --help
 python3 -m cli ib sample --help
 python3 -m cli oob query --help
@@ -220,6 +240,8 @@ Current CLI scope in P3:
 
 - `config show`
 - `config test`
+- `eguage probe`
+- `eguage registers`
 - `ib probe`
 - `ib sample`
 - `ib status`

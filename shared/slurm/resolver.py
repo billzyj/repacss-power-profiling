@@ -19,6 +19,56 @@ except ImportError:  # pragma: no cover - optional dependency
     hostlist = None
 
 
+def _split_slurm_nodelist(value: str) -> List[str]:
+    parts: List[str] = []
+    current: List[str] = []
+    bracket_depth = 0
+    for char in value:
+        if char == "[":
+            bracket_depth += 1
+        elif char == "]" and bracket_depth > 0:
+            bracket_depth -= 1
+        if char == "," and bracket_depth == 0:
+            part = "".join(current).strip()
+            if part:
+                parts.append(part)
+            current = []
+            continue
+        current.append(char)
+    part = "".join(current).strip()
+    if part:
+        parts.append(part)
+    return parts
+
+
+def _expand_bracket_token(token: str) -> List[str]:
+    match = re.fullmatch(r"([^\[\]]+)\[([^\[\]]+)\](.*)", token)
+    if not match:
+        return [token]
+
+    prefix, body, suffix = match.groups()
+    expanded: List[str] = []
+    for piece in body.split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        range_match = re.fullmatch(r"(\d+)-(\d+)", piece)
+        if range_match:
+            start_raw, end_raw = range_match.groups()
+            width = max(len(start_raw), len(end_raw)) if start_raw.startswith("0") or end_raw.startswith("0") else 0
+            start = int(start_raw)
+            end = int(end_raw)
+            step = 1 if end >= start else -1
+            for number in range(start, end + step, step):
+                if width:
+                    expanded.append(f"{prefix}{number:0{width}d}{suffix}")
+                else:
+                    expanded.append(f"{prefix}{number}{suffix}")
+        else:
+            expanded.append(f"{prefix}{piece}{suffix}")
+    return expanded or [token]
+
+
 def expand_nodelist(nodelist: str) -> List[str]:
     """Expand a Slurm nodelist into concrete hostnames."""
     cleaned = (nodelist or "").strip()
@@ -29,7 +79,11 @@ def expand_nodelist(nodelist: str) -> List[str]:
             return hostlist.expand_hostlist(cleaned)
         except Exception:
             pass
-    return [node.strip() for node in cleaned.split(",") if node.strip()]
+
+    nodes: List[str] = []
+    for token in _split_slurm_nodelist(cleaned):
+        nodes.extend(_expand_bracket_token(token))
+    return nodes
 
 
 def _parse_slurm_epoch(raw: Optional[str]) -> Optional[datetime]:
