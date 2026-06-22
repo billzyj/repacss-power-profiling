@@ -178,11 +178,17 @@ class Config:
     def load_from_env_file(self, env_file_path: str = None):
         """Load configuration from .env file"""
         if env_file_path is None:
-            env_file_path = str(Path(__file__).resolve().parent / ".env")
+            repo_root = Path(__file__).resolve().parents[3]
+            candidates = [
+                repo_root / ".env",
+                Path(__file__).resolve().parent / ".env",
+            ]
+            env_path = next((path for path in candidates if path.exists()), candidates[0])
+        else:
+            env_path = Path(env_file_path)
 
-        env_path = Path(env_file_path)
         if env_path.exists():
-            with open(env_path, 'r') as f:
+            with open(env_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith('#') and '=' in line:
@@ -202,6 +208,12 @@ class Config:
             f"REPACSS_DB_USER={self.db_user}",
             f"REPACSS_DB_PASSWORD={self.db_password}",
             f"REPACSS_DB_SSL_MODE={self.db_ssl_mode}",
+            "",
+            "# Private Network Access Policy",
+            f"REPACSS_ACCESS_MODE={os.getenv('REPACSS_ACCESS_MODE', 'auto')}",
+            f"REPACSS_INTERNAL_PROBE_TIMEOUT={os.getenv('REPACSS_INTERNAL_PROBE_TIMEOUT', '1.0')}",
+            f"REPACSS_DB_ACCESS_MODE={os.getenv('REPACSS_DB_ACCESS_MODE', 'auto')}",
+            f"REPACSS_EGAUGE_ACCESS_MODE={os.getenv('REPACSS_EGAUGE_ACCESS_MODE', 'auto')}",
             "",
             "# SSH Settings",
             f"REPACSS_SSH_HOSTNAME={self.ssh_hostname}",

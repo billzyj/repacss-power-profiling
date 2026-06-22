@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable
 
 import requests
 
+from shared.connection_policy import AccessDecision, resolve_access_decision
 from shared.errors import EGaugeError
 
 from .config import EGaugeSettings, get_eguage_settings
@@ -57,6 +58,7 @@ class EGaugeClient:
         self.settings = settings or get_eguage_settings()
         self.session = session
         self.tunnel: SSHLocalForward | None = None
+        self.access_decision: AccessDecision | None = None
         self.base_url: str | None = None
         self.jwt: str | None = None
 
@@ -67,27 +69,39 @@ class EGaugeClient:
         return cls(settings=get_eguage_settings())
 
     def connect(self) -> None:
-        """Open the SSH tunnel and prepare the HTTP session."""
+        """Prepare the HTTP session, using a tunnel only when the private target is not reachable."""
 
         issues = self.settings.validate()
         if issues:
             raise EGaugeError("Invalid eGauge configuration:\n- " + "\n- ".join(issues))
 
-        self.tunnel = SSHLocalForward(
-            ssh_host=self.settings.ssh.hostname,
-            ssh_port=self.settings.ssh.port,
-            ssh_user=self.settings.ssh.username,
+        self.access_decision = resolve_access_decision(
+            source="eguage",
             target_host=self.settings.api.host,
             target_port=self.settings.api.port,
-            keepalive_interval=self.settings.ssh.keepalive_interval,
-            local_bind_host=self.settings.ssh.local_bind_host,
-            private_key_path=self.settings.ssh.private_key_path,
+            access_mode=self.settings.access_mode,
+            probe_timeout=self.settings.probe_timeout,
         )
-        local_port = self.tunnel.start()
-        self.base_url = (
-            f"{self.settings.api.scheme}://{self.settings.ssh.local_bind_host}:{local_port}"
-            f"{self.settings.api.api_prefix}"
-        )
+        if self.access_decision.use_tunnel:
+            logger.info("Using SSH tunnel for eGauge access: %s", self.access_decision.reason)
+            self.tunnel = SSHLocalForward(
+                ssh_host=self.settings.ssh.hostname,
+                ssh_port=self.settings.ssh.port,
+                ssh_user=self.settings.ssh.username,
+                target_host=self.settings.api.host,
+                target_port=self.settings.api.port,
+                keepalive_interval=self.settings.ssh.keepalive_interval,
+                local_bind_host=self.settings.ssh.local_bind_host,
+                private_key_path=self.settings.ssh.private_key_path,
+            )
+            connect_host = self.settings.ssh.local_bind_host
+            connect_port = self.tunnel.start()
+        else:
+            logger.info("Using direct eGauge access: %s", self.access_decision.reason)
+            connect_host = self.settings.api.host
+            connect_port = self.settings.api.port
+
+        self.base_url = f"{self.settings.api.scheme}://{connect_host}:{connect_port}{self.settings.api.api_prefix}"
 
         if self.session is None:
             self.session = requests.Session()
@@ -106,6 +120,7 @@ class EGaugeClient:
         if self.tunnel is not None:
             self.tunnel.stop()
             self.tunnel = None
+        self.access_decision = None
         self.base_url = None
         self.jwt = None
 

@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
 
+from shared.connection_policy import AccessDecision, resolve_access_decision
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -50,10 +52,33 @@ class REPACSSPowerClient:
         self.schema = schema  # Schema to query from (default: idrac)
         self.tunnel = None
         self.db_connection = None
+        self.access_decision: Optional[AccessDecision] = None
         
     def connect(self) -> None:
-        """Connect to the database through SSH tunnel"""
+        """Connect to the database directly when reachable, otherwise through SSH tunnel."""
         try:
+            self.access_decision = resolve_access_decision(
+                source="db",
+                target_host=self.db_config.host,
+                target_port=self.db_config.port,
+            )
+            if not self.access_decision.use_tunnel:
+                logger.info("Using direct database access: %s", self.access_decision.reason)
+                self.db_connection = psycopg2.connect(
+                    host=self.db_config.host,
+                    port=self.db_config.port,
+                    database=self.db_config.database,
+                    user=self.db_config.username,
+                    password=self.db_config.password,
+                    sslmode=self.db_config.ssl_mode
+                )
+                with self.db_connection.cursor() as cursor:
+                    cursor.execute("SELECT version();")
+                    version = cursor.fetchone()
+                    logger.info(f"Connected to database: {version[0]}")
+                return
+
+            logger.info("Using SSH tunnel for database access: %s", self.access_decision.reason)
             logger.info(f"Establishing SSH tunnel to {self.ssh_config.hostname}:{self.ssh_config.port}")
             # Let SSHTunnelForwarder handle key loading automatically
             # Don't pre-load the key, let SSHTunnelForwarder handle it
@@ -66,7 +91,7 @@ class REPACSSPowerClient:
             
             # Find an available local port
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('', 0))
+                s.bind(('127.0.0.1', 0))
                 local_port = s.getsockname()[1]
             
             # Create SSH tunnel using subprocess
@@ -74,7 +99,7 @@ class REPACSSPowerClient:
                 'ssh',
                 '-N',
                 '-L',
-                f'{local_port}:{self.db_config.host}:{self.db_config.port}',
+                f'127.0.0.1:{local_port}:{self.db_config.host}:{self.db_config.port}',
                 '-p',
                 str(self.ssh_config.port),
                 # Fail fast if port-forward can't be established
@@ -109,9 +134,9 @@ class REPACSSPowerClient:
                 stdout, stderr = self.tunnel.communicate()
                 raise Exception(f"SSH tunnel failed: {stderr.decode()}")
             
-            logger.info(f"SSH tunnel established: localhost:{local_port} -> {self.db_config.host}:{self.db_config.port}")
+            logger.info(f"SSH tunnel established: 127.0.0.1:{local_port} -> {self.db_config.host}:{self.db_config.port}")
             self.db_connection = psycopg2.connect(
-                host='localhost',
+                host='127.0.0.1',
                 port=local_port,
                 database=self.db_config.database,
                 user=self.db_config.username,
@@ -154,6 +179,7 @@ class REPACSSPowerClient:
                 self.tunnel.close()
             self.tunnel = None
             logger.info("SSH tunnel closed")
+        self.access_decision = None
     
     def execute_query(self, query: str, params: Optional[tuple] = None) -> List[tuple]:
         """Execute a query and return results"""

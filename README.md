@@ -13,7 +13,7 @@ The long-term source layout is organized around three primary implementation dom
 
 - `shared/`: cross-domain contracts, config, Slurm helpers, common analysis/export foundations
 - `oob/`: OOB query semantics, backend adapters, and headnode job-end workflows
-- `eguage/`: SSH-tunneled eGauge Web API connector for facility-level telemetry
+- `eguage/`: direct-or-tunneled eGauge Web API connector for facility-level telemetry
 - `inband/`: IB collectors, runtime lifecycle, staging, and aggregation
 - `cli/`: user-facing program entrypoints, primarily for OOB query/export workflows
 - `tests/`: unit, integration, and end-to-end validation
@@ -70,7 +70,7 @@ repacss-power-profiling/
 ## Features
 
 - **Secure SSH tunnel connection** to TimescaleDB using `sshtunnel`
-- **Secure SSH tunnel connection** to private eGauge Web API endpoints through a jump host
+- **Direct-or-SSH access** to private eGauge Web API endpoints, with automatic REPACSS-internal reachability probing
 - **Multi-database support** for different cluster databases
 - Query power consumption, temperature, and utilization metrics from various schemas
 - Support for time-range queries and aggregations
@@ -120,8 +120,15 @@ REPACSS_DB_HOST=your.database.host.com
 REPACSS_DB_USER=your_database_username
 REPACSS_DB_PASSWORD=your_database_password
 
+# Private network access policy
+# auto means: direct inside REPACSS if the target is reachable, SSH tunnel otherwise.
+REPACSS_ACCESS_MODE=auto
+REPACSS_DB_ACCESS_MODE=auto
+REPACSS_EGAUGE_ACCESS_MODE=auto
+REPACSS_INTERNAL_PROBE_TIMEOUT=1.0
+
 # SSH Settings (replace with your actual values)
-REPACSS_SSH_HOSTNAME=your.ssh.host.com
+REPACSS_SSH_HOSTNAME=narumuu.ttu.edu
 REPACSS_SSH_USERNAME=your_ssh_username
 REPACSS_SSH_KEY_PATH=/path/to/your/private/key
 
@@ -131,6 +138,12 @@ REPACSS_EGAUGE_USERNAME=your_eguage_username
 REPACSS_EGAUGE_PASSWORD=your_eguage_password
 REPACSS_EGAUGE_SSH_HOSTNAME=narumuu.ttu.edu
 ```
+
+**Access Modes:**
+- `auto` probes the private DB or eGauge target first; if it is reachable from the current host, the connector uses direct access.
+- if the target is not reachable, `auto` opens an SSH local-forward through `REPACSS_SSH_HOSTNAME` or the eGauge-specific SSH host.
+- `direct` always skips SSH and is useful on REPACSS internal hosts.
+- `tunnel` always uses SSH and is useful from laptops or external networks.
 
 **SSH Key Requirements:**
 - **Supported formats**: RSA, Ed25519, ECDSA
@@ -185,7 +198,10 @@ python3 -m cli export --job 96597 --user kalebuch --nodelist rpg-93-6 --start "2
 python3 -m cli eguage probe
 
 # Fetch current eGauge register data
-python3 -m cli eguage registers --reg all --output output/eguage-registers.json
+python3 -m cli eguage registers --reg all --virtual value --output output/eguage-registers.json
+
+# See eguage/README.md for /register response fields, current vs historical rows,
+# idx/did/rate semantics, virtual registers, and the current REPACSS register inventory.
 
 # Debug-only in-band collector probe
 python3 -m cli ib probe

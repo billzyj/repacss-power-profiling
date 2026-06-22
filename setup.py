@@ -159,6 +159,7 @@ def check_new_modules():
         "eguage/config.py",
         "eguage/README.md",
         "shared/config/config.py",
+        "shared/connection_policy.py",
         "shared/slurm/dispatcher.py",
         "oob/query_manager.py",
         "oob/slurm/epilog_handler.py",

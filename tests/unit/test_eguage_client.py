@@ -62,6 +62,8 @@ def _settings() -> EGaugeSettings:
             keepalive_interval=60,
             local_bind_host="127.0.0.1",
         ),
+        access_mode="tunnel",
+        probe_timeout=0.1,
     )
 
 
@@ -110,3 +112,20 @@ def test_client_login_with_password_sets_bearer_header(monkeypatch) -> None:
         "pwd": "secret",
         "rlm": "eGauge Administration",
     }
+
+
+def test_client_connects_direct_when_access_mode_is_direct() -> None:
+    session = _FakeSession([])
+    settings = _settings()
+    direct_settings = EGaugeSettings(
+        api=settings.api,
+        ssh=settings.ssh,
+        access_mode="direct",
+        probe_timeout=settings.probe_timeout,
+    )
+
+    client = EGaugeClient(settings=direct_settings, session=session)
+    client.connect()
+
+    assert client.tunnel is None
+    assert client.base_url == "https://192.168.4.81:443/api"

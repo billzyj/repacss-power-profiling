@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import click
 
+from shared.connection_policy import get_configured_access_mode, get_probe_timeout
 from shared.config import config
 
 
@@ -26,6 +27,10 @@ def show_config():
     click.echo(f"ssh_port: {config.ssh_port}")
     click.echo(f"ssh_username: {config.ssh_username}")
     click.echo(f"ssh_key_path: {config.ssh_private_key_path or '<system default>'}")
+    click.echo(f"db_access_mode: {get_configured_access_mode('db')}")
+    click.echo(f"eguage_access_mode: {get_configured_access_mode('eguage')}")
+    click.echo(f"db_probe_timeout: {get_probe_timeout('db')}")
+    click.echo(f"eguage_probe_timeout: {get_probe_timeout('eguage')}")
     click.echo(f"slurm_rest_host: {config.slurm_rest_host or '<not configured>'}")
     click.echo(f"slurm_rest_port: {config.slurm_rest_port}")
     click.echo(f"slurm_rest_user: {config.slurm_rest_user or '<not configured>'}")
@@ -37,6 +42,13 @@ def show_config():
 def test_config():
     """Validate local configuration."""
     issues = config.validate_config()
+    try:
+        get_configured_access_mode("db")
+        get_configured_access_mode("eguage")
+        get_probe_timeout("db")
+        get_probe_timeout("eguage")
+    except ValueError as exc:
+        issues.append(str(exc))
     if issues:
         click.echo("Configuration issues found:")
         for issue in issues:

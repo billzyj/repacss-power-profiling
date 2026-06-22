@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
+from shared.connection_policy import get_configured_access_mode, get_probe_timeout
 from shared.config.config import config as shared_config
 
 
@@ -62,9 +63,15 @@ class EGaugeSettings:
 
     api: EGaugeAPIConfig
     ssh: EGaugeSSHConfig
+    access_mode: str
+    probe_timeout: float
 
     def validate(self) -> List[str]:
         issues: List[str] = []
+        if self.access_mode not in {"auto", "direct", "tunnel"}:
+            issues.append("REPACSS_EGAUGE_ACCESS_MODE must be one of: auto, direct, tunnel")
+        if self.probe_timeout <= 0:
+            issues.append("REPACSS_EGAUGE_PROBE_TIMEOUT must be a positive number")
         if self.api.scheme not in {"http", "https"}:
             issues.append("REPACSS_EGAUGE_SCHEME must be either 'http' or 'https'")
         if not self.api.host:
@@ -121,4 +128,9 @@ def get_eguage_settings() -> EGaugeSettings:
         local_bind_host=os.getenv("REPACSS_EGAUGE_LOCAL_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1",
     )
 
-    return EGaugeSettings(api=api, ssh=ssh)
+    return EGaugeSettings(
+        api=api,
+        ssh=ssh,
+        access_mode=get_configured_access_mode("eguage"),
+        probe_timeout=get_probe_timeout("eguage"),
+    )

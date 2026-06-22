@@ -6,8 +6,15 @@ import sys
 import os
 from unittest.mock import patch, MagicMock
 
-# Add src to Python path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Add repo root before src so top-level packages such as scripts/ are not
+# shadowed by compatibility packages under src/.
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+SRC_ROOT = os.path.join(REPO_ROOT, 'src')
+for path in (SRC_ROOT, REPO_ROOT):
+    if path in sys.path:
+        sys.path.remove(path)
+sys.path.insert(0, REPO_ROOT)
+sys.path.insert(1, SRC_ROOT)
 
 
 @pytest.fixture(autouse=True)

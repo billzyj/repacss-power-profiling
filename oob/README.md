@@ -45,6 +45,18 @@ The generic query API infers the backing database from the hostname prefix:
 
 Unknown prefixes raise an error.
 
+## Database Access
+
+OOB reads Monster-backed TimescaleDB data through the shared REPACSS connection policy:
+
+- `REPACSS_DB_ACCESS_MODE=auto` probes `REPACSS_DB_HOST:REPACSS_DB_PORT` first
+- if the probe succeeds, OOB connects directly to the database
+- if the probe fails, OOB opens an SSH local-forward through `REPACSS_SSH_HOSTNAME`
+- `REPACSS_DB_ACCESS_MODE=direct` always skips SSH
+- `REPACSS_DB_ACCESS_MODE=tunnel` always uses SSH
+
+The default jump host in `env.template` is `narumuu.ttu.edu`. Keep real database credentials and SSH settings in the local root `.env`; that file is ignored by git.
+
 ## Quick Start
 
 Run a recent-data query from the CLI:

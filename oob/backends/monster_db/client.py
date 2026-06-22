@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import psycopg2
 
+from shared.connection_policy import AccessDecision, resolve_access_decision
 from shared.config.config import DatabaseConfig, SSHConfig
 
 
@@ -26,22 +27,41 @@ class REPACSSPowerClient:
         self.schema = schema
         self.tunnel = None
         self.db_connection = None
+        self.access_decision: Optional[AccessDecision] = None
 
     def connect(self) -> None:
         try:
+            self.access_decision = resolve_access_decision(
+                source="db",
+                target_host=self.db_config.host,
+                target_port=self.db_config.port,
+            )
+            if not self.access_decision.use_tunnel:
+                logger.info("Using direct database access: %s", self.access_decision.reason)
+                self.db_connection = psycopg2.connect(
+                    host=self.db_config.host,
+                    port=self.db_config.port,
+                    database=self.db_config.database,
+                    user=self.db_config.username,
+                    password=self.db_config.password,
+                    sslmode=self.db_config.ssl_mode,
+                )
+                return
+
+            logger.info("Using SSH tunnel for database access: %s", self.access_decision.reason)
             logger.info("Establishing SSH tunnel to %s:%s", self.ssh_config.hostname, self.ssh_config.port)
 
             import socket
 
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.bind(("", 0))
+                sock.bind(("127.0.0.1", 0))
                 local_port = sock.getsockname()[1]
 
             ssh_cmd = [
                 "ssh",
                 "-N",
                 "-L",
-                f"{local_port}:{self.db_config.host}:{self.db_config.port}",
+                f"127.0.0.1:{local_port}:{self.db_config.host}:{self.db_config.port}",
                 "-p",
                 str(self.ssh_config.port),
                 "-o",
@@ -69,7 +89,7 @@ class REPACSSPowerClient:
                 raise Exception(f"SSH tunnel failed: {stderr.decode()}")
 
             self.db_connection = psycopg2.connect(
-                host="localhost",
+                host="127.0.0.1",
                 port=local_port,
                 database=self.db_config.database,
                 user=self.db_config.username,
@@ -89,6 +109,7 @@ class REPACSSPowerClient:
             self.tunnel.terminate()
             self.tunnel.wait()
             self.tunnel = None
+        self.access_decision = None
 
     def execute_query(self, query: str, params: Optional[tuple] = None) -> List[tuple]:
         if not self.db_connection:
