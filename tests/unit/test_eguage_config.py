@@ -27,6 +27,7 @@ def test_eguage_settings_fall_back_to_common_ssh_settings(monkeypatch) -> None:
     monkeypatch.delenv("REPACSS_EGAUGE_ACCESS_MODE", raising=False)
     monkeypatch.setenv("REPACSS_INTERNAL_PROBE_TIMEOUT", "1.0")
     monkeypatch.delenv("REPACSS_EGAUGE_PROBE_TIMEOUT", raising=False)
+    monkeypatch.delenv("REPACSS_EGAUGE_SSH_KEEPALIVE", raising=False)
 
     settings = get_eguage_settings()
 

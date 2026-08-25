@@ -157,6 +157,7 @@ def check_new_modules():
         "cli/export.py",
         "eguage/client.py",
         "eguage/config.py",
+        "eguage/history.py",
         "eguage/README.md",
         "shared/config/config.py",
         "shared/connection_policy.py",
