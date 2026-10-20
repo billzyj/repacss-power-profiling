@@ -152,6 +152,7 @@ def test_inband_only_dispatch_leaves_the_oob_report_to_the_wrapper(tmp_path: Pat
         "SLURM_JOB_COMMENT": "power:both",
         "SLURM_JOB_OVERSUBSCRIBE": "NO",
         "REPACSS_POWER_IB_QUEUE_ROOT": str(tmp_path / "queue"),
+        "REPACSS_POWER_IB_NODES": "rpc-97-[1-3]",
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -165,4 +166,34 @@ def test_inband_only_dispatch_leaves_the_oob_report_to_the_wrapper(tmp_path: Pat
     record = read_json_file(tmp_path / "queue" / PENDING / f"{storage_key_from_env(env)}.json")
     assert record["nodes"] == ["rpc-97-1", "rpc-97-2", "rpc-97-3", "rpc-97-4"]
     assert record["mode"] == "both"
+    assert record["unsupported_nodes"] == ["rpc-97-4"]
     assert not (tmp_path / "queue" / "deliver").exists()
+
+
+def test_jobs_on_nodes_without_in_band_hooks_get_an_immediate_explanation(tmp_path: Path):
+    config = _config(tmp_path)
+    nodes = ["rpc-97-4", "rpc-97-5"]
+    record = build_record(
+        job_id="779",
+        attempt_id="repacss-779-100",
+        cluster="repacss",
+        user="alice",
+        nodes=nodes,
+        start_epoch=START,
+        end_epoch=START + 10,
+        now=1000.0,
+        exclusive="NODE",
+        unsupported_nodes=finalizer.unsupported_nodes(nodes, {"REPACSS_POWER_IB_NODES": "rpc-97-[1-4]"}),
+    )
+    enqueue(config.queue_root, record)
+
+    assert process_queue(config, now=1000.0) == 1  # no waiting for nodes that never collect
+
+    summary = read_json_file(export_dir(config, record) / "summary.json")
+    assert summary["status"] == "skipped"
+    assert "not enabled on rpc-97-5," in summary["reason"]
+
+
+def test_without_an_in_band_node_list_every_node_collects():
+    assert finalizer.unsupported_nodes(["rpc-91-1", "rpg-93-2"], {}) == []
+    assert finalizer.unsupported_nodes(["rpc-97-1"], {"REPACSS_POWER_IB_NODES": "rpc-97-[1-4],rpg-93-[6-7]"}) == []

@@ -90,11 +90,19 @@ def enqueue_oob_delivery(cluster: Optional[str], job_id: str, user: str, out_dir
         LOGGER.warning("could not queue delivery of the OOB report for job %s: %s", job_id, exc)
 
 
+def _result(status: str, target: Path, attempts: List[Dict[str, str]]) -> Dict[str, Any]:
+    result: Dict[str, Any] = {"status": status, "path": str(target)}
+    if attempts:
+        result["attempts"] = attempts
+    return result
+
+
 def copy_report(source: Path, roots: Sequence[str], job_id: str, name: str) -> Dict[str, Any]:
     """Copy `source` to `<root>/power_reports/<job_id>/<name>` under the first usable root.
 
     Runs as the job user. An existing destination is left alone, so a report the user
-    already received, moved, or edited is never overwritten.
+    already received, moved, or edited is never overwritten. A result lists the roots it
+    skipped and why, also when a later root succeeded.
     """
     if not source.is_dir():
         return {"status": "not_delivered", "reason": f"{source} is not a readable report directory"}
@@ -109,7 +117,7 @@ def copy_report(source: Path, roots: Sequence[str], job_id: str, name: str) -> D
         job_dir = base / DELIVERY_DIRNAME / job_id
         target = job_dir / name
         if target.exists():
-            return {"status": "already_delivered", "path": str(target)}
+            return _result("already_delivered", target, attempts)
         partial = job_dir / f".{name}.partial"
         try:
             job_dir.mkdir(parents=True, exist_ok=True)
@@ -125,7 +133,7 @@ def copy_report(source: Path, roots: Sequence[str], job_id: str, name: str) -> D
                 elif path.is_file():
                     shutil.copyfile(path, destination)
             os.replace(partial, target)
-            return {"status": "delivered", "path": str(target)}
+            return _result("delivered", target, attempts)
         except OSError as exc:
             shutil.rmtree(partial, ignore_errors=True)
             attempts.append({"root": root, "reason": str(exc)})

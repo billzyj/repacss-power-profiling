@@ -39,7 +39,7 @@ from inband.storage import DEFAULT_IB_STORE_ROOT, read_json_file, resolve_storag
 from shared.models import ParsedPowerComment, SlurmJobContext
 from shared.slurm.delivery import enqueue_delivery
 from shared.slurm.finalize_queue import COMPLETE, DEFAULT_QUEUE_ROOT, FAILED, enqueue, pending, settle
-from shared.slurm.resolver import parse_job_start_epoch
+from shared.slurm.resolver import expand_nodelist, parse_job_start_epoch
 
 LOGGER = logging.getLogger("repacss_power.slurm.finalizer")
 
@@ -48,6 +48,9 @@ DEFAULT_REPORT_ROOT = Path(
 )
 DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("REPACSS_POWER_IB_FINALIZE_TIMEOUT_SECONDS", "600"))
 IB_DIRNAME = "ib"
+# Optional Slurm hostlist of the nodes whose hooks collect in-band data, such as
+# "rpc-97-[1-4]". Unset means every node. Read by EpilogSlurmctld when it queues a job.
+IB_NODES_ENV = "REPACSS_POWER_IB_NODES"
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,7 @@ def build_record(
     interval_ms: int = 1000,
     exclusive: str = "",
     work_dir: str = "",
+    unsupported_nodes: Sequence[str] = (),
 ) -> Dict[str, Any]:
     return {
         "schema_version": 1,
@@ -95,9 +99,16 @@ def build_record(
         "interval_ms": interval_ms,
         "exclusive": exclusive,
         "work_dir": work_dir,
+        "unsupported_nodes": list(unsupported_nodes),
         "enqueued_at": _iso(now),
         "deadline_epoch": now + timeout_seconds,
     }
+
+
+def unsupported_nodes(nodes: Sequence[str], env: Mapping[str, str]) -> List[str]:
+    """Nodes outside the site's in-band host list; with no list, every node collects."""
+    enabled = set(expand_nodelist(env.get(IB_NODES_ENV, "")))
+    return [node for node in nodes if node not in enabled] if enabled else []
 
 
 def enqueue_inband_job(
@@ -124,6 +135,7 @@ def enqueue_inband_job(
         interval_ms=parsed.interval_ms,
         exclusive=job_exclusive(env),
         work_dir=env.get("SLURM_JOB_WORK_DIR", ""),
+        unsupported_nodes=unsupported_nodes(context.nodes, env),
     )
     return enqueue(queue_root or DEFAULT_QUEUE_ROOT, record)
 
@@ -252,6 +264,12 @@ def try_finalize(config: FinalizerConfig, record: Mapping[str, Any], now: float)
             config,
             record,
             f"In-band collection requires --exclusive; Slurm reported {exclusive} for this job.",
+        )
+    if record.get("unsupported_nodes"):
+        return _write_skipped_export(
+            config,
+            record,
+            f"In-band collection is not enabled on {', '.join(record['unsupported_nodes'])}, so this job has no in-band data.",
         )
     job_dir, notes = _locate_job_dir(config, record)
     waiting = [node for node in record["nodes"] if not (job_dir / node / DONE_FILENAME).exists()]

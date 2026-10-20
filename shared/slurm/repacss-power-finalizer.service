@@ -1,18 +1,21 @@
 [Unit]
 Description=REPACSS in-band finalizer
+Wants=network-online.target
 After=network-online.target remote-fs.target
 
 [Service]
 Type=simple
 # Run as the controller's SlurmUser, the identity that EpilogSlurmctld uses to write
-# the queue and the OOB reports. Site paths belong in the EnvironmentFile:
-# REPACSS_POWER_IB_QUEUE_ROOT, MONSTER_POWER_IB_STORE_ROOT, REPACSS_POWER_REPORT_ROOT.
+# the queue and the OOB reports. All site settings, including the installation, come
+# from the EnvironmentFile; see repacss-power-controller.env.example.
 User=slurm
-WorkingDirectory=/opt/repacss-power-profiling
-EnvironmentFile=-/etc/repacss-power/finalizer.env
-ExecStart=/opt/repacss-power-profiling/.venv/bin/python -m shared.slurm.finalizer run
+EnvironmentFile=/etc/repacss-power/controller.env
+ExecStart=/usr/bin/env ${REPACSS_POWER_PYTHON} -m shared.slurm.finalizer run
 Restart=on-failure
 RestartSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target

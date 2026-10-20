@@ -44,6 +44,7 @@ def test_an_unusable_work_directory_falls_back_to_home(tmp_path: Path):
 
     assert result["status"] == "delivered"
     assert result["path"] == str(home / "power_reports" / "777" / "ib")
+    assert result["attempts"] == [{"root": str(tmp_path / "deleted"), "reason": "not a directory on this host"}]
 
 
 def test_an_existing_delivery_is_never_overwritten(tmp_path: Path):
