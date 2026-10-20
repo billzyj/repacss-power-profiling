@@ -41,7 +41,7 @@ Repository code and installed site scripts are separate deployment surfaces:
 - Both report types share one job directory under the report root, `<report_root>/<user>/<job_id>/oob/` and `.../ib/`, which is always kept. [delivery.py](../shared/slurm/delivery.py) then copies each report to `<work_dir>/power_reports/<job_id>/<oob|ib>/`, or under the user's home when the job's working directory cannot be used. The [delivery unit](../shared/slurm/repacss-power-deliver.service) runs as root only to switch to the job owner: a forked child takes the user's identity before it reads the shared copy or writes the destination, so files arrive owned by the user. SlurmUser cannot write into user directories, which is why the shared copy alone was the earlier design.
 - The repository [controller wrapper](../src/services/slurm.epilogslurmctld) still sleeps, creates output directories, and invokes the synchronous dispatcher.
 
-A site typically already has its own Prolog, Epilog, and EpilogSlurmctld scripts. A legacy controller wrapper may match only `power_profiling` and call the legacy `slurm_power_query.py`, and compute wrappers may carry other integrations. Append the REPACSS hooks to them rather than replacing them. Verify the active copies on the controllers and compute nodes before deployment; editing this repository does not update those copies.
+A site typically already has its own Prolog, Epilog, and EpilogSlurmctld scripts. A legacy controller wrapper may match only `power_profiling` and call the legacy `slurm_power_query.py`, and compute wrappers may carry other integrations. Append the REPACSS hooks to them rather than replacing them; [Deployment on the head node and the compute nodes](#deployment-on-the-head-node-and-the-compute-nodes) lists every change. Verify the active copies on the controllers and compute nodes before deployment; editing this repository does not update those copies.
 
 ## Repository change map
 
@@ -67,17 +67,186 @@ Paths marked **New** are proposed modules or deployment assets, not existing imp
 
 The RAPL profile describes available hardware. It must not replace dynamic allocation metadata: Slurm determines which devices this job may measure.
 
-## Installed configuration change map
+## Deployment on the head node and the compute nodes
 
-| Deployment location | Required action |
+This section lists every installed change, by host, as validated on a Zen4 canary set: one-node and four-node `power:inband` and `power:both` jobs, OOB-only jobs, delivery into the job owner's directory, and a job on a node without in-band hooks. Placeholders: `<install_dir>` is a fixed release checkout such as `/opt/repacss-power-profiling`, `<queue_root>` the controller-local queue, normally `/var/spool/repacss-power/finalize-queue`, `<staging_root>` the shared staging directory, and `<report_root>` the shared report root. No credential is needed anywhere except by the OOB database query on the head node.
+
+| Host | Component | Kind | Runs as | Source |
+| --- | --- | --- | --- | --- |
+| Head node | REPACSS block and OOB output path in the site `slurm.epilogslurmctld` | Slurm script | SlurmUser | Section [EpilogSlurmctld wrapper](#epilogslurmctld-wrapper) |
+| Head node | `repacss-power-finalizer.service` | systemd service | SlurmUser | [unit](../shared/slurm/repacss-power-finalizer.service) |
+| Head node | `repacss-power-deliver.service` | systemd service | root, identity switching only | [unit](../shared/slurm/repacss-power-deliver.service) |
+| Head node | `/etc/repacss-power/controller.env` | configuration | read by both services | [example](../shared/slurm/repacss-power-controller.env.example) |
+| Compute node | REPACSS block in the site `slurm.prolog` and `slurm.epilog` | Slurm script | SlurmdUser (root) | [prolog block](../shared/slurm/warewulf/slurm.prolog.block), [epilog block](../shared/slurm/warewulf/slurm.epilog.block) |
+| Compute node | `repacss-power-ib@.service`, `repacss-power-stage@.service` | systemd unit templates | root | [runner](../shared/slurm/repacss-power-ib@.service), [stager](../shared/slurm/repacss-power-stage@.service) |
+| Compute node | `/etc/repacss-power/node.env` | configuration | read by the hook blocks | Section [Distribution with Warewulf](#distribution-with-warewulf) |
+
+### Head node
+
+#### EpilogSlurmctld wrapper
+
+The site's `slurm.epilogslurmctld` keeps its own OOB handling: it reads the job comment, waits for telemetry ingestion, queries the database, and writes the report. Two edits connect it to the rest of the system.
+
+1. Insert this block after the line that sets `COMMENT` and before the wrapper's comment gate. It relies on the wrapper's `LOGFILE`, `COMMENT`, and `KEYWORD`; `KEYWORD` holds the legacy OOB keyword, `power_profiling`, that the gate compares against:
+
+   ```bash
+   # >>> REPACSS in-band >>>
+   case "${SLURM_JOB_COMMENT:-$COMMENT}" in
+     *power:inband*|*power:both*)
+       env PYTHONPATH=<install_dir> REPACSS_POWER_IB_QUEUE_ROOT=<queue_root> \
+         REPACSS_POWER_IB_NODES='<collecting nodes, Slurm hostlist>' \
+         <install_dir>/.venv/bin/python -m shared.slurm.dispatcher --inband-only >>"$LOGFILE" 2>&1 || true
+       case "${SLURM_JOB_COMMENT:-$COMMENT}" in
+         *power:both*) COMMENT="$KEYWORD" ;;
+         *) exit 0 ;;
+       esac
+       ;;
+     *power:oob*) COMMENT="$KEYWORD" ;;
+   esac
+   # <<< REPACSS in-band <<<
+   ```
+
+2. Change the OOB output directory from `${POWER_BASE}/${RUN_AS}/${JOB_ID}` to `${POWER_BASE}/${RUN_AS}/${JOB_ID}/oob`, so both reports of a job share one directory.
+
+Resulting behavior:
+
+| Comment | In-band record queued | OOB report |
+| --- | --- | --- |
+| `power:inband` | yes | no |
+| `power:both` | yes | yes, after the ingestion delay |
+| `power:oob`, or the legacy `power_profiling` | no | yes |
+| anything else | no | no |
+
+The dispatcher call only writes one queue record and returns. `REPACSS_POWER_IB_NODES` lists the nodes whose hooks collect; a job that uses any other node is recorded with `unsupported_nodes`, and the finalizer immediately exports a `skipped` report that names those nodes. Remove the variable once every node collects. The OOB delay (90 s) covers Redfish report delivery, which arrives about every 60 s; the OOB query and plots take a few seconds for up to eight nodes, well within the hook timeout. The OOB handler then queues its report for delivery.
+
+Write the edited wrapper back with `cat edited > slurm.epilogslurmctld` after a backup, so the file keeps its inode, ownership, and ACLs. When the controllers share `/etc/slurm`, one edit changes every controller at once.
+
+#### Services and configuration
+
+- `/etc/repacss-power/controller.env`, root-owned and mode 0644, names the interpreter (`REPACSS_POWER_PYTHON`), the checkout (`PYTHONPATH`), `REPACSS_POWER_IB_QUEUE_ROOT`, `MONSTER_POWER_IB_STORE_ROOT`, and `REPACSS_POWER_REPORT_ROOT`. The unit files contain no site paths.
+- `repacss-power-finalizer.service` runs as SlurmUser and polls the queue every 15 s. For each record it waits until every expected node has published `.done`, or until the deadline ten minutes after the job, then writes `<report_root>/<user>/<job_id>/ib/` and queues it for delivery. A requeued job's later attempt writes `ib-<attempt start>/`.
+- `repacss-power-deliver.service` runs as root with only `CAP_SETUID`, `CAP_SETGID`, `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`, and `CAP_KILL`. For each queued report it forks a child that takes the job owner's uid, gid, and groups before touching any path, and the child copies the report to `<work_dir>/power_reports/<job_id>/<oob|ib>/`, or to `~/power_reports/<job_id>/` when the working directory is unusable on the head node. A delivery that does not finish within 120 s is abandoned. The service imports no configuration module, so it never holds database credentials.
+- `<queue_root>` is owned by SlurmUser, mode 0750. Records move from `pending/` to `complete/` or `failed/`; delivery records live under `<queue_root>/deliver/`.
+
+Install with `systemctl enable --now repacss-power-finalizer.service repacss-power-deliver.service` after copying both units to `/etc/systemd/system`.
+
+#### Installation and mounts
+
+- `<install_dir>` is a checkout of a release tag with a virtual environment from `requirements.txt`; the OOB handler needs it, and its `.env` holds the database settings. Update it with `git pull --ff-only` to the next tag, and check first that the `.env` still defines `REPACSS_DB_USER`, `REPACSS_DB_PASSWORD`, and `REPACSS_SSH_HOSTNAME`, because the code has no built-in defaults for them.
+- The head node must mount `<staging_root>` and `<report_root>`, and the users' home and work file systems for delivery. A report whose destination is not mounted stays in the shared copy only.
+- A backup controller runs the same wrapper. Without `<install_dir>`, `<queue_root>`, and the two services there, jobs that end during a failover get their OOB report in the shared report root, but no in-band report and no delivery.
+
+### Compute nodes
+
+#### Prolog and Epilog blocks
+
+Append [slurm.prolog.block](../shared/slurm/warewulf/slurm.prolog.block) to the end of the site's `slurm.prolog` and [slurm.epilog.block](../shared/slurm/warewulf/slurm.epilog.block) to `slurm.epilog`, before any final `exit`; both are shown below. Both blocks are identical on every node; whether a node collects, and where the code and staging root are, come from `/etc/repacss-power/node.env`. The Prolog block starts no process for jobs without an in-band comment, and neither block can fail the site script.
+
+```bash
+# >>> REPACSS power >>>
+# Opt-in in-band profiling for power:inband and power:both jobs. Settings, including
+# whether this node collects, come from /etc/repacss-power/node.env. Never fails the prolog.
+case "${SLURM_JOB_COMMENT:-}" in
+  *power:inband*|*power:both*)
+    if [ -r /etc/repacss-power/node.env ]; then
+      ( set -a; . /etc/repacss-power/node.env; set +a
+        [ "${REPACSS_POWER_IB_ENABLED:-0}" = 1 ] || exit 0
+        exec /usr/bin/env bash "$REPACSS_POWER_HOME/shared/slurm/repacss-power.prolog.sh" ) || true
+    fi
+    ;;
+esac
+# <<< REPACSS power <<<
+```
+
+```bash
+# >>> REPACSS power >>>
+# Stop and stage the in-band run that the prolog started for this job, even if the node
+# was disabled meanwhile. Never fails the epilog.
+if [ -f "/run/repacss-power/${SLURM_JOB_ID:-none}.env" ] && [ -r /etc/repacss-power/node.env ]; then
+  ( set -a; . /etc/repacss-power/node.env; set +a
+    exec /usr/bin/env bash "$REPACSS_POWER_HOME/shared/slurm/repacss-power.epilog.sh" ) || true
+fi
+# <<< REPACSS power <<<
+```
+
+`/etc/repacss-power/node.env`:
+
+```bash
+REPACSS_POWER_IB_ENABLED=1
+REPACSS_POWER_HOME=/opt/repacss-power-profiling
+MONSTER_POWER_PYTHON=/usr/bin/python3
+MONSTER_POWER_IB_STORE_ROOT=<staging_root>
+```
+
+The canary installation used an earlier form of the Prolog block with the host list and code path written into it. The blocks above move both into `node.env`, so the scripts can be the same on every node and live in the shared site overlay or image.
+
+The Prolog wrapper starts the runner only for an exclusive allocation (`SLURM_JOB_OVERSUBSCRIBE=NO` on Slurm 25.11, or `SLURM_JOB_EXCLUSIVE=NODE`), and only when the node is in the audited RAPL profile ([rapl_profiles.json](../inband/rapl_profiles.json)); otherwise it logs the reason under the syslog tag `repacss-power-hooks` and starts nothing. A node added to the cluster later needs an audit entry before it collects.
+
+#### systemd units and local files
+
+- `repacss-power-ib@.service` and `repacss-power-stage@.service` go to `/etc/systemd/system`. They are templates that the hooks instantiate per job: Prolog starts the runner with `systemctl start`, and Epilog stops it and starts the stager with `--no-block`. They are not enabled. systemd reads them at boot, so they belong in a system overlay or the image, not in a runtime overlay.
+- The code is the `inband/` package and a few `shared/` modules, about 700 KB of standard-library Python that runs with the system `/usr/bin/python3`. No virtual environment, database access, or credentials are needed on compute nodes.
+- Runtime state: `/run/repacss-power/` (per-job environment files) and `/var/spool/repacss-power/` (the local spool); both are created on demand. On a stateless node both live in memory, which is acceptable because a node failure also ends the job.
+- `<staging_root>` must be writable by root on every compute node, or by a provisioned service identity under `root_squash`.
+
+### Distribution with Warewulf
+
+Warewulf provisions stateless nodes from a node image plus overlays. System overlays are applied at boot, on top of the image; runtime overlays are refreshed by `wwclient` while the node runs, typically every minute. The layout below keeps REPACSS out of the image, so rebuilding the image for other reasons cannot remove it, and puts only the per-node switch in a runtime overlay, so nodes can be enabled or disabled without a reboot.
+
+| Item | Where | Why |
+| --- | --- | --- |
+| `<install_dir>` at a release tag | system overlay `repacss-power-system` | pinned code, the same on every node, independent of the image |
+| Two unit templates | system overlay `repacss-power-system`, `/etc/systemd/system/` | applied at boot, before systemd reads them |
+| Prolog and Epilog blocks | wherever the site's `slurm.prolog` and `slurm.epilog` come from, typically a site system overlay such as `slurm` | identical on every node; a block placed in the image would be overwritten at boot by an overlay that ships the same file |
+| `/etc/repacss-power/node.env` | runtime overlay `repacss-power`, rendered from node tags | enable or disable a node without a reboot |
+
+Commands below use Warewulf 4.6 names; check the flags with `--help` on the installed version. Find where the site scripts come from first: `wwctl overlay list --all` lists every overlay file, and `wwctl node list --all <node>` shows a node's image and overlay lists.
+
+1. **System overlay.** Create `repacss-power-system` (`wwctl overlay create`), and add the `inband` and `shared` packages of the release tag under `/opt/repacss-power-profiling` and the two unit files under `/etc/systemd/system/` with `wwctl overlay mkdir` and `wwctl overlay import`. Leave out `*.ww` files, which Warewulf would render as templates. Append the two blocks to `slurm.prolog` and `slurm.epilog` in the overlay or image that provides them, keeping their mode: a non-executable `slurm.prolog` fails every job and drains the node.
+2. **Runtime overlay.** Create the overlay and its template:
+
+   ```bash
+   wwctl overlay create repacss-power
+   wwctl overlay edit --parents repacss-power /etc/repacss-power/node.env.ww
+   ```
+
+   with the content of [node.env.ww](../shared/slurm/warewulf/node.env.ww):
+
+   ```text
+   # Generated by Warewulf for {{ .Id }}; set the node tag repacss_ib=1 to collect.
+   REPACSS_POWER_IB_ENABLED={{ if .Tags.repacss_ib }}1{{ else }}0{{ end }}
+   REPACSS_POWER_HOME=/opt/repacss-power-profiling
+   MONSTER_POWER_PYTHON=/usr/bin/python3
+   MONSTER_POWER_IB_STORE_ROOT={{ .Tags.repacss_staging_root }}
+   ```
+
+3. **Attach and configure.** Add `repacss-power-system` to the compute profile's system overlays after the overlay that provides the Slurm scripts, and `repacss-power` to its runtime overlays, keeping the existing lists (`wwctl profile list --all` shows them). Set the staging root once on the profile, and build:
+
+   ```bash
+   wwctl profile set <profile> --system-overlays=<existing overlays>,repacss-power-system
+   wwctl profile set <profile> --runtime-overlays=<existing overlays>,repacss-power
+   wwctl profile set <profile> --tagadd repacss_staging_root=<staging_root>
+   wwctl overlay build
+   wwctl overlay show --render <node> repacss-power /etc/repacss-power/node.env.ww
+   ```
+
+   Every node now has `REPACSS_POWER_IB_ENABLED=0`: the hooks are installed but inactive. A canary can use node-level lists instead of the profile; Warewulf 4.6 merges node and profile lists.
+4. **Reboot** in a rolling fashion so that the system overlay applies, for example `scontrol reboot ASAP nextstate=resume reason="repacss power hooks" <nodes>` where a `RebootProgram` is configured, or drain, `wwctl power cycle`, and resume. Running jobs finish first.
+5. **Canary.** Enable a few nodes with `wwctl node set <nodes> --tagadd repacss_ib=1` and `wwctl overlay build`. Within one runtime-overlay refresh the nodes collect, with no reboot. Set `REPACSS_POWER_IB_NODES` in the head-node block to the same hostlist.
+6. **Widen.** Tag whole partitions, keeping `REPACSS_POWER_IB_NODES` equal to the tagged set; remove the variable from the head-node block when every node collects.
+7. **Upgrade.** Deploy the same release tag on the head node and in `repacss-power-system`. A release that changes the sample file format needs both updated together, because the finalizer reads only the current format (node seals carry `schema_version`); let running in-band jobs finish before switching.
+8. **Disable or roll back.** Removing the `repacss_ib` tag and rebuilding overlays stops new collection within one refresh; jobs already collecting are still stopped and staged by the Epilog block, which does not check the switch. To remove the integration, detach both overlays, remove the blocks from the site scripts, and reboot. Staged data and reports stay.
+
+Do not distribute credentials, the head node's `.env`, or the controller services to compute nodes; the compute side needs none of them.
+
+### Slurm configuration notes
+
+| Setting | Note |
 | --- | --- |
-| Controllers: site `job_submit.lua` and `slurm.conf` | Not required for IB: Prolog enforces `--exclusive` and validates the request. Rejecting non-exclusive IB requests at submission would need a site `job_submit.lua` policy, which is a site decision. Verify which request and run-identity variables the installed Slurm version exports. Slurm 25.11 gives Prolog `SLURM_JOB_OVERSUBSCRIBE` and no `SLURM_JOB_EXCLUSIVE`. |
-| Every participating compute node: `/etc/slurm/scripts/slurm.prolog` | Compose the REPACSS helper with existing site/ECHO logic. The helper starts a local runner for IB/both. |
-| Every participating compute node: `/etc/slurm/scripts/slurm.epilog` | Stop the exact saved IB run and notify stage-out. Arrange ordering with user cleanup and ECHO; preserve unrelated site behavior. |
-| Every participating compute node: systemd units and local installation | Install the runner, stager, profile, sensor access rules, and `/var/spool/repacss-power`. Use `/run/repacss-power` only for transient runtime state. |
-| Controllers: `/etc/slurm/scripts/slurm.epilogslurmctld` | Replace the legacy exact-keyword gate with the canonical dispatcher; enqueue OOB, IB, and both. |
-| Finalizer host: controller or `monitor` | Install the [finalizer](../shared/slurm/repacss-power-finalizer.service) (SlurmUser) and [delivery](../shared/slurm/repacss-power-deliver.service) (root, limited to identity switching) units with `/etc/repacss-power/controller.env` from the [example](../shared/slurm/repacss-power-controller.env.example), and point the wrapper's OOB output at `<report_root>/<user>/<job_id>/oob`. While only some nodes collect, set `REPACSS_POWER_IB_NODES` for the dispatcher. The host must mount the users' home and work file systems for delivery; otherwise reports stay in the shared copy. If it runs on `monitor`, add reliable background transfer from controller-local queues and account for controller failover. |
-| Shared filesystem | Provision staging and report roots with appropriate service/user identities, permissions, and retention. Verify write and delivery behavior with the actual NFS export policy. |
+| `job_submit.lua` | Not required: Prolog enforces `--exclusive` and validates the request. Rejecting non-exclusive in-band requests at submission would need a site `job_submit.lua` policy, which is a site decision. |
+| Exclusivity variable | Verify which variables the installed Slurm exports to Prolog and EpilogSlurmctld. Slurm 25.11 gives both `SLURM_JOB_OVERSUBSCRIBE` and no `SLURM_JOB_EXCLUSIVE`. |
+| `SLURM_JOB_WORK_DIR` | EpilogSlurmctld receives it on Slurm 25.11; delivery uses it as the first destination. |
+| Several Prolog programs | Recent Slurm releases accept a list of Prolog and Epilog programs in `slurm.conf`. A separate REPACSS script would avoid editing the site scripts, but it changes `slurm.conf`, which is a site decision. The blocks above change only the existing scripts. |
 
 Compute Prolog and Epilog normally run as `SlurmdUser=root`. If the site sets `PrologFlags=Contain`, it already implies `Alloc`; preserve the existing flags. Evaluate adding `DeferBatch` only if the batch launch must wait for all nodes, and pair it with real runner readiness. Do not replace the site's complete flag list or hook timeout values with a generic example. See the [Slurm configuration reference](https://slurm.schedmd.com/slurm.conf.html).
 
@@ -234,9 +403,10 @@ These points need measurements before the paper claims them: counter advancement
 compute Prolog -> per-node runner -> local spool -> independent stager -> NFS staging
 compute Epilog -> stop and seal ----------------------^
 
-EpilogSlurmctld -> controller-local queue -> background finalizer -> user report
-                                                ^
-                            OOB query and/or NFS IB artifacts
+EpilogSlurmctld -> controller-local queue -> finalizer service -> shared report root
+                                                ^                        |
+                            NFS IB artifacts (OOB: hook queries DB)      v
+                                             delivery service -> job working directory or home
 ```
 
 The sampling and hook paths must not depend on NFS availability. Samples stay in node-local files until the job ends; at about 0.25 MB per node-hour for raw RAPL readings at 1 s, a long job's trace fits in the local spool, and a node failure ends the job anyway. Transfer into an NFS-side temporary file and rename within that filesystem after verification. Publish `.done` last, only after every file in the producer's sealed inventory is present; the marker means publication finished, not that every collector succeeded.

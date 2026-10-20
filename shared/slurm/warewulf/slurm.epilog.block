@@ -1,0 +1,8 @@
+# >>> REPACSS power >>>
+# Stop and stage the in-band run that the prolog started for this job, even if the node
+# was disabled meanwhile. Never fails the epilog.
+if [ -f "/run/repacss-power/${SLURM_JOB_ID:-none}.env" ] && [ -r /etc/repacss-power/node.env ]; then
+  ( set -a; . /etc/repacss-power/node.env; set +a
+    exec /usr/bin/env bash "$REPACSS_POWER_HOME/shared/slurm/repacss-power.epilog.sh" ) || true
+fi
+# <<< REPACSS power <<<

@@ -1,0 +1,13 @@
+# >>> REPACSS power >>>
+# Opt-in in-band profiling for power:inband and power:both jobs. Settings, including
+# whether this node collects, come from /etc/repacss-power/node.env. Never fails the prolog.
+case "${SLURM_JOB_COMMENT:-}" in
+  *power:inband*|*power:both*)
+    if [ -r /etc/repacss-power/node.env ]; then
+      ( set -a; . /etc/repacss-power/node.env; set +a
+        [ "${REPACSS_POWER_IB_ENABLED:-0}" = 1 ] || exit 0
+        exec /usr/bin/env bash "$REPACSS_POWER_HOME/shared/slurm/repacss-power.prolog.sh" ) || true
+    fi
+    ;;
+esac
+# <<< REPACSS power <<<
