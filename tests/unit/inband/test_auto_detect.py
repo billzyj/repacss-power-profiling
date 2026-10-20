@@ -11,3 +11,9 @@ def test_build_collectors_uses_requested_order():
     assert isinstance(collectors[0], NvidiaSMICollector)
     assert isinstance(collectors[1], RAPLCollector)
     assert isinstance(collectors[2], ROCMSMICollector)
+
+
+def test_build_collectors_passes_node_context_to_rapl():
+    (collector,) = build_collectors(["rapl"], partition="zen4", node="rpc-91-1")
+    assert collector.partition == "zen4"
+    assert collector.node == "rpc-91-1"

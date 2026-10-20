@@ -42,6 +42,17 @@ def test_semantic_mismatch_becomes_warning():
     assert any("ignored backend" in warning for warning in parsed.warnings)
 
 
+@pytest.mark.parametrize("interval", ["0", "249", "60001"])
+def test_interval_outside_bounds_raises(interval):
+    with pytest.raises(CommentParseError, match="between 250 and 60000"):
+        parse_power_comment(f"power:inband;interval_ms={interval}")
+
+
+def test_interval_bounds_are_inclusive():
+    assert parse_power_comment("power:inband;interval_ms=250").interval_ms == 250
+    assert parse_power_comment("power:inband;interval_ms=60000").interval_ms == 60000
+
+
 def test_mixed_comment_namespace_extracts_power_token():
     parsed = parse_power_comment("ECHO=1;R=0.80 power:both;collectors=rapl;interval_ms=750")
     assert parsed.enabled is True

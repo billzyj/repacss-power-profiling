@@ -10,6 +10,8 @@ from typing import Any, Dict, Mapping, Optional
 
 DEFAULT_IB_STORE_ROOT = Path(os.environ.get("MONSTER_POWER_IB_STORE_ROOT", "/mnt/SHARED-AREA/repacss-power-staging"))
 DEFAULT_STATE_DIR = Path(os.environ.get("MONSTER_POWER_STATE_DIR", "/run/repacss-power"))
+# Node-local spool for chunks the runner writes; the stager copies them to staging.
+DEFAULT_LOCAL_SPOOL_ROOT = Path(os.environ.get("REPACSS_POWER_IB_LOCAL_SPOOL_ROOT", "/var/spool/repacss-power"))
 
 
 def build_storage_key(job_id: str, job_start_epoch: int, cluster_name: Optional[str] = None) -> str:
@@ -39,6 +41,10 @@ def node_root_path(storage_key: str, hostname: str, ib_store_root: Path = DEFAUL
     return job_root_path(storage_key, ib_store_root=ib_store_root) / hostname
 
 
+def spool_node_path(storage_key: str, hostname: str, spool_root: Path = DEFAULT_LOCAL_SPOOL_ROOT) -> Path:
+    return spool_root / storage_key / hostname
+
+
 def collector_output_path(
     storage_key: str, hostname: str, collector_name: str, ib_store_root: Path = DEFAULT_IB_STORE_ROOT
 ) -> Path:
@@ -65,23 +71,16 @@ def summary_path(storage_key: str, ib_store_root: Path = DEFAULT_IB_STORE_ROOT) 
     return job_root_path(storage_key, ib_store_root=ib_store_root) / "summary.json"
 
 
-def epoch_cache_path(job_id: str, cluster_name: Optional[str], ib_store_root: Path = DEFAULT_IB_STORE_ROOT) -> Path:
-    cluster = (cluster_name or "cluster").strip() or "cluster"
-    return ib_store_root / ".state" / f"{cluster}-{job_id}.epoch"
-
-
-def ensure_node_staging(storage_key: str, hostname: str, ib_store_root: Path = DEFAULT_IB_STORE_ROOT) -> Path:
-    """Create the shared NFS staging root for one job/node."""
-    root = node_root_path(storage_key, hostname, ib_store_root=ib_store_root)
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
 def write_json_file(path: Path, payload: Mapping[str, Any]) -> Path:
+    """Write JSON atomically: readers see the old file or the complete new one."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    partial = path.with_name(path.name + ".partial")
+    with partial.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
         handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(partial, path)
     return path
 
 

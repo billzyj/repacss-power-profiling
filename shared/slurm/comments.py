@@ -11,6 +11,10 @@ from shared.models import ParsedPowerComment
 LEGACY_KEYWORD = "power_profiling"
 VALID_MODES = {"oob", "inband", "both"}
 VALID_BACKENDS = {"db", "api"}
+# The upper bound keeps sampling well inside the Zen4 RAPL counter wrap time
+# (about 65 s at 1000 W for its 65.5 kJ range).
+MIN_INTERVAL_MS = 250
+MAX_INTERVAL_MS = 60000
 
 
 def extract_power_token(raw_comment: str) -> str:
@@ -95,8 +99,10 @@ def parse_power_comment(raw_comment: str) -> ParsedPowerComment:
                 interval_ms = int(value)
             except ValueError as exc:
                 raise CommentParseError(f"Invalid interval_ms: {value}") from exc
-            if interval_ms <= 0:
-                raise CommentParseError("interval_ms must be positive")
+            if not MIN_INTERVAL_MS <= interval_ms <= MAX_INTERVAL_MS:
+                raise CommentParseError(
+                    f"interval_ms must be between {MIN_INTERVAL_MS} and {MAX_INTERVAL_MS}: {interval_ms}"
+                )
         else:
             warnings.append(f"ignored unknown key {key}")
 

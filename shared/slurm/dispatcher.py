@@ -47,8 +47,17 @@ def dispatch_from_env() -> int:
     for warning in parsed.warnings:
         LOGGER.warning("job %s comment warning: %s", context.job_id, warning)
 
+    if parsed.includes_inband:
+        # Queue only: the finalizer waits for the compute nodes outside this hook.
+        from shared.slurm.finalizer import enqueue_inband_job
+
+        try:
+            record = enqueue_inband_job(context, parsed)
+            LOGGER.info("job %s queued for in-band finalization: %s", context.job_id, record)
+        except Exception as exc:  # pragma: no cover - defensive wrapper
+            LOGGER.exception("could not queue in-band finalization for job %s: %s", context.job_id, exc)
+
     if not parsed.includes_oob:
-        LOGGER.info("job %s requested mode=%s; OOB dispatcher leaves non-OOB modes for later phases", context.job_id, parsed.mode)
         return 0
 
     if parsed.backend != "db":

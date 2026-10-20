@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import socket
 import threading
 import time
@@ -10,10 +9,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
-import pandas as pd
-
+from inband.chunks import DEFAULT_CHUNK_SECONDS, ChunkWriter
 from shared.errors import InbandCollectorError
 
 
@@ -33,8 +31,9 @@ class CollectorHandle:
 
     collector_name: str
     hostname: str
-    output_path: Path
+    output_dir: Path
     interval_ms: int
+    chunk_seconds: float
     started_at: datetime
     metadata: Dict[str, Any] = field(default_factory=dict)
     _thread: Optional[threading.Thread] = field(default=None, repr=False)
@@ -48,11 +47,11 @@ class CollectorResult:
 
     collector_name: str
     hostname: str
-    samples: pd.DataFrame
     status: Literal["complete", "partial", "failed"]
-    output_path: Path
+    output_dir: Path
     sample_count: int
     message: str = ""
+    chunks: Tuple[Path, ...] = ()
 
 
 class Collector(ABC):
@@ -67,9 +66,13 @@ class Collector(ABC):
     def is_available(self) -> bool:
         return self.probe().available
 
+    def manifest_payload(self) -> Optional[Dict[str, Any]]:
+        """Startup provenance the runner writes next to the collector output, if any."""
+        return None
+
     @abstractmethod
-    def start(self, interval_ms: int, output_path: Path) -> CollectorHandle:
-        """Start collecting samples to the given output path."""
+    def start(self, interval_ms: int, output_dir: Path, chunk_seconds: float = DEFAULT_CHUNK_SECONDS) -> CollectorHandle:
+        """Start collecting samples into rotating chunks in `output_dir`."""
 
     @abstractmethod
     def stop(self, handle: CollectorHandle) -> CollectorResult:
@@ -77,7 +80,11 @@ class Collector(ABC):
 
 
 class PollingCSVCollector(Collector):
-    """Common implementation for collectors that write CSV rows on a timer."""
+    """Common implementation for collectors that write CSV rows on a timer.
+
+    Rows go to rotating chunks (see `inband.chunks`). After a stop request the loop
+    takes one more sample, so the data covers the time up to the stop.
+    """
 
     def hostname(self) -> str:
         return socket.gethostname()
@@ -94,12 +101,12 @@ class PollingCSVCollector(Collector):
     def collect_rows(self, runtime: Dict[str, Any], elapsed_seconds: float) -> List[Dict[str, Any]]:
         """Collect one interval worth of rows."""
 
-    def start(self, interval_ms: int, output_path: Path) -> CollectorHandle:
+    def start(self, interval_ms: int, output_dir: Path, chunk_seconds: float = DEFAULT_CHUNK_SECONDS) -> CollectorHandle:
         probe = self.probe()
         if not probe.available:
             raise InbandCollectorError(f"{self.name} collector is unavailable: {probe.reason}")
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
         runtime = self.prepare_runtime()
         runtime.setdefault("status", "running")
         runtime.setdefault("message", "")
@@ -112,8 +119,9 @@ class PollingCSVCollector(Collector):
         handle = CollectorHandle(
             collector_name=self.name,
             hostname=self.hostname(),
-            output_path=output_path,
+            output_dir=output_dir,
             interval_ms=interval_ms,
+            chunk_seconds=chunk_seconds,
             started_at=started_at,
             metadata=probe.details.copy(),
             _stop_event=stop_event,
@@ -131,7 +139,6 @@ class PollingCSVCollector(Collector):
         if handle._thread is not None:
             handle._thread.join(timeout=max(handle.interval_ms / 1000.0 * 3, 2.0))
 
-        samples = pd.read_csv(handle.output_path) if handle.output_path.exists() else pd.DataFrame(columns=self.csv_columns())
         runtime = handle._runtime
         status = runtime.get("status", "complete")
         message = runtime.get("message", "")
@@ -141,34 +148,39 @@ class PollingCSVCollector(Collector):
         return CollectorResult(
             collector_name=handle.collector_name,
             hostname=handle.hostname,
-            samples=samples,
             status=status,
-            output_path=handle.output_path,
+            output_dir=handle.output_dir,
             sample_count=int(runtime.get("sample_count", 0)),
             message=message,
+            chunks=tuple(runtime.get("chunks", ())),
         )
 
     def _run_loop(self, handle: CollectorHandle) -> None:
         runtime = handle._runtime
+        writer = ChunkWriter(handle.output_dir, self.csv_columns(), handle.chunk_seconds)
         try:
-            with handle.output_path.open("w", newline="", encoding="utf-8") as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=list(self.csv_columns()))
-                writer.writeheader()
-                csvfile.flush()
-
-                while handle._stop_event is not None and not handle._stop_event.is_set():
-                    loop_start = time.monotonic()
-                    elapsed_seconds = loop_start - runtime["started_monotonic"]
-                    rows = self.collect_rows(runtime, elapsed_seconds)
-                    if rows:
-                        writer.writerows(rows)
-                        csvfile.flush()
-                        runtime["sample_count"] += len(rows)
-                    sleep_for = max(0.0, (handle.interval_ms / 1000.0) - (time.monotonic() - loop_start))
-                    if sleep_for > 0:
-                        handle._stop_event.wait(timeout=sleep_for)
+            while handle._stop_event is not None and not handle._stop_event.is_set():
+                loop_start = time.monotonic()
+                self._sample(runtime, writer, loop_start)
+                sleep_for = max(0.0, (handle.interval_ms / 1000.0) - (time.monotonic() - loop_start))
+                if sleep_for > 0:
+                    handle._stop_event.wait(timeout=sleep_for)
+            # Cover the time between the last sample and the stop request.
+            self._sample(runtime, writer, time.monotonic())
             runtime["status"] = "complete" if runtime.get("sample_count", 0) > 0 else "partial"
-            runtime["message"] = runtime.get("message", "")
         except Exception as exc:  # pragma: no cover - defensive sampler guard
             runtime["status"] = "failed"
             runtime["message"] = str(exc)
+        finally:
+            try:
+                writer.close()
+            except OSError as exc:  # pragma: no cover - defensive sampler guard
+                runtime["status"] = "failed"
+                runtime["message"] = runtime.get("message") or f"cannot close chunk: {exc}"
+            runtime["chunks"] = tuple(writer.closed)
+
+    def _sample(self, runtime: Dict[str, Any], writer: ChunkWriter, now: float) -> None:
+        rows = self.collect_rows(runtime, now - runtime["started_monotonic"])
+        if rows:
+            writer.write_rows(rows)
+            runtime["sample_count"] += len(rows)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 from pathlib import Path
 from typing import Optional
@@ -29,6 +30,24 @@ def _print_probe(collector_probe):
         click.echo(f"  reason: {collector_probe.reason}")
     for key, value in collector_probe.details.items():
         click.echo(f"  {key}: {value}")
+
+
+def _node_options(command):
+    """Add the partition and node RAPL uses to select its audited profile."""
+    command = click.option(
+        "--node",
+        default=None,
+        help="Slurm node name for RAPL profile selection. Defaults to the short hostname.",
+    )(command)
+    return click.option(
+        "--partition",
+        default=os.environ.get("SLURM_JOB_PARTITION", ""),
+        help="Slurm partition for RAPL profile selection. Defaults to SLURM_JOB_PARTITION.",
+    )(command)
+
+
+def _local_node(node: Optional[str]) -> str:
+    return node or socket.gethostname().split(".", 1)[0]
 
 
 @click.group(name="ib")
@@ -76,13 +95,14 @@ def status_command(job_id: Optional[str], storage_key: Optional[str], hostname: 
     "--collector",
     "collectors",
     multiple=True,
-    type=click.Choice(["rapl", "nvidia_smi", "rocm_smi"]),
+    type=click.Choice(["rapl", "nvml", "nvidia_smi", "rocm_smi"]),
     help="Optionally probe only selected collectors.",
 )
-def probe_command(collectors):
+@_node_options
+def probe_command(collectors, partition: str, node: Optional[str]):
     """Probe in-band collector availability without starting sampling."""
     requested = collectors or None
-    for collector_probe in probe_collectors(requested):
+    for collector_probe in probe_collectors(requested, partition=partition, node=_local_node(node)):
         _print_probe(collector_probe)
 
 
@@ -91,7 +111,7 @@ def probe_command(collectors):
     "--collector",
     "collectors",
     multiple=True,
-    type=click.Choice(["rapl", "nvidia_smi", "rocm_smi"]),
+    type=click.Choice(["rapl", "nvml", "nvidia_smi", "rocm_smi"]),
     help="Collectors to run. Defaults to auto-detected available collectors.",
 )
 @click.option("--interval-ms", default=1000, show_default=True, type=int, help="Sampling interval in milliseconds.")
@@ -101,16 +121,20 @@ def probe_command(collectors):
     type=click.Path(path_type=Path),
     default=Path("output") / "inband-debug",
     show_default=True,
-    help="Directory used for collector CSV outputs.",
+    help="Directory for collector chunks, written under chunks/<collector>/.",
 )
-def sample_command(collectors, interval_ms: int, duration_s: float, output_dir: Path):
+@_node_options
+def sample_command(
+    collectors, interval_ms: int, duration_s: float, output_dir: Path, partition: str, node: Optional[str]
+):
     """Run a short local sampling session for collector validation.
 
     This is a debug surface only. Production in-band collection remains Slurm-driven.
     """
 
     requested = collectors or None
-    instances = build_collectors(requested) if collectors else select_collectors()
+    context = {"partition": partition, "node": _local_node(node)}
+    instances = build_collectors(requested, **context) if collectors else select_collectors(**context)
     if not instances:
         raise click.ClickException("No available in-band collectors were selected.")
 
@@ -118,9 +142,9 @@ def sample_command(collectors, interval_ms: int, duration_s: float, output_dir: 
     handles = []
     try:
         for collector in instances:
-            output_path = output_dir / f"{collector.name}.csv"
-            handles.append(collector.start(interval_ms=interval_ms, output_path=output_path))
-            click.echo(f"started {collector.name} -> {output_path}")
+            chunk_dir = output_dir / "chunks" / collector.name
+            handles.append(collector.start(interval_ms=interval_ms, output_dir=chunk_dir))
+            click.echo(f"started {collector.name} -> {chunk_dir}")
         time.sleep(duration_s)
     except InbandCollectorError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -128,7 +152,8 @@ def sample_command(collectors, interval_ms: int, duration_s: float, output_dir: 
         for collector, handle in zip(instances, handles):
             result = collector.stop(handle)
             click.echo(
-                f"{result.collector_name}: status={result.status} samples={result.sample_count} output={result.output_path}"
+                f"{result.collector_name}: status={result.status} samples={result.sample_count} "
+                f"chunks={len(result.chunks)} output={result.output_dir}"
             )
             if result.message:
                 click.echo(f"  message: {result.message}")

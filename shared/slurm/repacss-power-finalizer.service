@@ -1,0 +1,17 @@
+[Unit]
+Description=REPACSS in-band finalizer
+After=network-online.target remote-fs.target
+
+[Service]
+Type=simple
+# Run as the controller's SlurmUser, the identity that EpilogSlurmctld uses to write
+# the queue and that already writes OOB reports under /mnt/SHARED-AREA/power_reports.
+User=slurm
+WorkingDirectory=/opt/repacss-power-profiling
+EnvironmentFile=-/etc/repacss-power/finalizer.env
+ExecStart=/opt/repacss-power-profiling/.venv/bin/python -m shared.slurm.finalizer run
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

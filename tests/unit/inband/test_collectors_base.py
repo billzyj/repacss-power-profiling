@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import time
 from pathlib import Path
 
@@ -24,7 +25,7 @@ class DummyCollector(PollingCSVCollector):
         runtime["counter"] += 1
         return [
             {
-                "timestamp": "2026-01-01T00:00:00+00:00",
+                "timestamp": f"2026-01-01T00:00:{runtime['counter']:02d}+00:00",
                 "elapsed_seconds": round(elapsed_seconds, 6),
                 "hostname": self.hostname(),
                 "value": runtime["counter"],
@@ -32,14 +33,20 @@ class DummyCollector(PollingCSVCollector):
         ]
 
 
-def test_polling_csv_collector_start_and_stop(tmp_path: Path):
+def _rows(path: Path):
+    with path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def test_collector_writes_rotating_chunks_and_samples_once_more_on_stop(tmp_path: Path):
     collector = DummyCollector()
-    output_path = tmp_path / "dummy.csv"
-    handle = collector.start(interval_ms=10, output_path=output_path)
-    time.sleep(0.05)
+    handle = collector.start(interval_ms=10, output_dir=tmp_path, chunk_seconds=0.03)
+    time.sleep(0.12)
     result = collector.stop(handle)
 
-    assert result.status in {"complete", "partial"}
-    assert result.sample_count >= 1
-    assert output_path.exists()
-    assert "value" in result.samples.columns
+    assert result.status == "complete"
+    assert len(result.chunks) >= 2
+    assert sorted(tmp_path.iterdir()) == sorted(result.chunks)  # no .partial left behind
+    values = [int(row["value"]) for chunk in result.chunks for row in _rows(chunk)]
+    # Every sample, including the one taken after the stop request, is in exactly one chunk.
+    assert values == list(range(1, result.sample_count + 1))

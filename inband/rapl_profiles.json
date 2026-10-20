@@ -1,0 +1,384 @@
+{
+  "schema_version": 1,
+  "kind": "repacss_rapl_profiles",
+  "collector": "rapl",
+  "backend": "powercap_sysfs",
+  "counter_unit": "uJ",
+  "domain_identity": "path",
+  "provenance": {
+    "audit_id": "rapl-audit-20261008T204824Z-1343382",
+    "audited_at": "2026-10-08T20:48:24.233147+00:00",
+    "source_files": {
+      "rapl-static-config.json": {
+        "sha256": "17af5985c64cc149297a008c12c1ee811dbad6c2cfa96e2d9a838e43f35427a8"
+      },
+      "inventory.json": {
+        "sha256": "f19799f373654b04cc252c8e07614cdeeb988608fcb94764d66cceef9580cc24"
+      },
+      "summary.txt": {
+        "sha256": "03449e1c13bdaf7a58c312d26dec6c412b60befc403a87995fa1965a2c282411"
+      }
+    },
+    "verified_node_count": 119,
+    "verification_scope": [
+      "domain_structure",
+      "counter_readability"
+    ],
+    "counter_progression_verified": false,
+    "probe_euids": [
+      0
+    ],
+    "observed_energy_file_access": {
+      "mode": "0400",
+      "uid": 0,
+      "gid": 0
+    }
+  },
+  "partitions": {
+    "zen4": {
+      "rapl_profile": "zen4_rapl",
+      "verified_node_count": 110,
+      "verified_nodes": [
+        "rpc-91-1",
+        "rpc-91-2",
+        "rpc-91-3",
+        "rpc-91-4",
+        "rpc-91-5",
+        "rpc-91-6",
+        "rpc-91-7",
+        "rpc-91-8",
+        "rpc-91-9",
+        "rpc-91-10",
+        "rpc-91-11",
+        "rpc-91-12",
+        "rpc-91-13",
+        "rpc-91-14",
+        "rpc-91-15",
+        "rpc-91-16",
+        "rpc-91-17",
+        "rpc-91-18",
+        "rpc-91-19",
+        "rpc-91-20",
+        "rpc-92-1",
+        "rpc-92-2",
+        "rpc-92-3",
+        "rpc-92-4",
+        "rpc-92-5",
+        "rpc-92-6",
+        "rpc-92-7",
+        "rpc-92-8",
+        "rpc-92-9",
+        "rpc-92-10",
+        "rpc-92-11",
+        "rpc-92-12",
+        "rpc-92-13",
+        "rpc-92-14",
+        "rpc-92-15",
+        "rpc-92-16",
+        "rpc-92-17",
+        "rpc-92-18",
+        "rpc-92-19",
+        "rpc-92-20",
+        "rpc-94-1",
+        "rpc-94-2",
+        "rpc-94-3",
+        "rpc-94-4",
+        "rpc-94-5",
+        "rpc-94-6",
+        "rpc-94-7",
+        "rpc-94-8",
+        "rpc-94-9",
+        "rpc-94-10",
+        "rpc-94-11",
+        "rpc-94-12",
+        "rpc-94-13",
+        "rpc-94-14",
+        "rpc-94-15",
+        "rpc-94-16",
+        "rpc-94-17",
+        "rpc-94-18",
+        "rpc-94-19",
+        "rpc-94-20",
+        "rpc-95-1",
+        "rpc-95-2",
+        "rpc-95-3",
+        "rpc-95-4",
+        "rpc-95-5",
+        "rpc-95-6",
+        "rpc-95-7",
+        "rpc-95-8",
+        "rpc-95-9",
+        "rpc-95-10",
+        "rpc-96-1",
+        "rpc-96-2",
+        "rpc-96-3",
+        "rpc-96-4",
+        "rpc-96-5",
+        "rpc-96-6",
+        "rpc-96-7",
+        "rpc-96-8",
+        "rpc-96-9",
+        "rpc-96-10",
+        "rpc-96-11",
+        "rpc-96-12",
+        "rpc-96-13",
+        "rpc-96-14",
+        "rpc-96-15",
+        "rpc-96-16",
+        "rpc-96-17",
+        "rpc-96-18",
+        "rpc-96-19",
+        "rpc-96-20",
+        "rpc-97-1",
+        "rpc-97-2",
+        "rpc-97-3",
+        "rpc-97-4",
+        "rpc-97-5",
+        "rpc-97-6",
+        "rpc-97-7",
+        "rpc-97-8",
+        "rpc-97-9",
+        "rpc-97-10",
+        "rpc-97-11",
+        "rpc-97-12",
+        "rpc-97-13",
+        "rpc-97-14",
+        "rpc-97-15",
+        "rpc-97-16",
+        "rpc-97-17",
+        "rpc-97-18",
+        "rpc-97-19",
+        "rpc-97-20"
+      ],
+      "observed_kernel_versions": [
+        "5.14.0-570.60.1+12.1.el9_6_ciq.x86_64",
+        "6.12.0-211.47.1.el10_2.x86_64"
+      ]
+    },
+    "h100": {
+      "rapl_profile": "h100_host_rapl",
+      "verified_node_count": 8,
+      "verified_nodes": [
+        "rpg-93-1",
+        "rpg-93-2",
+        "rpg-93-3",
+        "rpg-93-4",
+        "rpg-93-5",
+        "rpg-93-6",
+        "rpg-93-7",
+        "rpg-93-8"
+      ],
+      "observed_kernel_versions": [
+        "5.14.0-570.60.1+12.1.el9_6_ciq.x86_64"
+      ]
+    },
+    "h100-build": {
+      "rapl_profile": "h100_host_rapl",
+      "verified_node_count": 1,
+      "verified_nodes": [
+        "rpg-93-9"
+      ],
+      "observed_kernel_versions": [
+        "5.14.0-570.60.1+12.1.el9_6_ciq.x86_64"
+      ]
+    }
+  },
+  "profiles": {
+    "zen4_rapl": {
+      "root": "/sys/class/powercap/intel-rapl",
+      "signature": "cb778a7beb35225f4ef3a52e159e3f4d81b1fb657ca364db59dbabb6a50f1364",
+      "domains": [
+        {
+          "attributes": [
+            "enabled",
+            "energy_uj",
+            "max_energy_range_uj",
+            "name",
+            "uevent"
+          ],
+          "energy_path": "intel-rapl:0/energy_uj",
+          "max_energy_range_uj": 65532610987,
+          "name": "package-0",
+          "parent": null,
+          "path": "intel-rapl:0"
+        },
+        {
+          "attributes": [
+            "enabled",
+            "energy_uj",
+            "max_energy_range_uj",
+            "name",
+            "uevent"
+          ],
+          "energy_path": "intel-rapl:0/intel-rapl:0:0/energy_uj",
+          "max_energy_range_uj": 65532610987,
+          "name": "core",
+          "parent": "intel-rapl:0",
+          "path": "intel-rapl:0/intel-rapl:0:0"
+        },
+        {
+          "attributes": [
+            "enabled",
+            "energy_uj",
+            "max_energy_range_uj",
+            "name",
+            "uevent"
+          ],
+          "energy_path": "intel-rapl:1/energy_uj",
+          "max_energy_range_uj": 65532610987,
+          "name": "package-1",
+          "parent": null,
+          "path": "intel-rapl:1"
+        },
+        {
+          "attributes": [
+            "enabled",
+            "energy_uj",
+            "max_energy_range_uj",
+            "name",
+            "uevent"
+          ],
+          "energy_path": "intel-rapl:1/intel-rapl:1:0/energy_uj",
+          "max_energy_range_uj": 65532610987,
+          "name": "core",
+          "parent": "intel-rapl:1",
+          "path": "intel-rapl:1/intel-rapl:1:0"
+        }
+      ],
+      "domain_groups": {
+        "cpu_package": [
+          "intel-rapl:0",
+          "intel-rapl:1"
+        ],
+        "host_dram": [],
+        "core": [
+          "intel-rapl:0/intel-rapl:0:0",
+          "intel-rapl:1/intel-rapl:1:0"
+        ],
+        "platform": []
+      }
+    },
+    "h100_host_rapl": {
+      "root": "/sys/class/powercap/intel-rapl",
+      "signature": "e71377b042fe8a70414a56876490c4e994035c4e64c93b72fb6efa40da214fd2",
+      "domains": [
+        {
+          "attributes": [
+            "constraint_0_max_power_uw",
+            "constraint_0_name",
+            "constraint_0_power_limit_uw",
+            "constraint_0_time_window_us",
+            "constraint_1_max_power_uw",
+            "constraint_1_name",
+            "constraint_1_power_limit_uw",
+            "constraint_1_time_window_us",
+            "enabled",
+            "energy_uj",
+            "max_energy_range_uj",
+            "name",
+            "uevent"
+          ],
+          "energy_path": "intel-rapl:0/energy_uj",
+          "max_energy_range_uj": 262143328850,
+          "name": "package-0",
+          "parent": null,
+          "path": "intel-rapl:0"
+        },
+        {
+          "attributes": [
+            "constraint_0_max_power_uw",
+            "constraint_0_name",
+            "constraint_0_power_limit_uw",
+            "constraint_0_time_window_us",
+            "enabled",
+            "energy_uj",
+            "max_energy_range_uj",
+            "name",
+            "uevent"
+          ],
+          "energy_path": "intel-rapl:0/intel-rapl:0:0/energy_uj",
+          "max_energy_range_uj": 262143328850,
+          "name": "dram",
+          "parent": "intel-rapl:0",
+          "path": "intel-rapl:0/intel-rapl:0:0"
+        },
+        {
+          "attributes": [
+            "constraint_0_max_power_uw",
+            "constraint_0_name",
+            "constraint_0_power_limit_uw",
+            "constraint_0_time_window_us",
+            "constraint_1_max_power_uw",
+            "constraint_1_name",
+            "constraint_1_power_limit_uw",
+            "constraint_1_time_window_us",
+            "enabled",
+            "energy_uj",
+            "max_energy_range_uj",
+            "name",
+            "uevent"
+          ],
+          "energy_path": "intel-rapl:1/energy_uj",
+          "max_energy_range_uj": 4294967295000000,
+          "name": "psys",
+          "parent": null,
+          "path": "intel-rapl:1"
+        },
+        {
+          "attributes": [
+            "constraint_0_max_power_uw",
+            "constraint_0_name",
+            "constraint_0_power_limit_uw",
+            "constraint_0_time_window_us",
+            "constraint_1_max_power_uw",
+            "constraint_1_name",
+            "constraint_1_power_limit_uw",
+            "constraint_1_time_window_us",
+            "enabled",
+            "energy_uj",
+            "max_energy_range_uj",
+            "name",
+            "uevent"
+          ],
+          "energy_path": "intel-rapl:2/energy_uj",
+          "max_energy_range_uj": 262143328850,
+          "name": "package-1",
+          "parent": null,
+          "path": "intel-rapl:2"
+        },
+        {
+          "attributes": [
+            "constraint_0_max_power_uw",
+            "constraint_0_name",
+            "constraint_0_power_limit_uw",
+            "constraint_0_time_window_us",
+            "enabled",
+            "energy_uj",
+            "max_energy_range_uj",
+            "name",
+            "uevent"
+          ],
+          "energy_path": "intel-rapl:2/intel-rapl:2:0/energy_uj",
+          "max_energy_range_uj": 262143328850,
+          "name": "dram",
+          "parent": "intel-rapl:2",
+          "path": "intel-rapl:2/intel-rapl:2:0"
+        }
+      ],
+      "domain_groups": {
+        "cpu_package": [
+          "intel-rapl:0",
+          "intel-rapl:2"
+        ],
+        "host_dram": [
+          "intel-rapl:0/intel-rapl:0:0",
+          "intel-rapl:2/intel-rapl:2:0"
+        ],
+        "core": [],
+        "platform": [
+          "intel-rapl:1"
+        ]
+      }
+    }
+  }
+}

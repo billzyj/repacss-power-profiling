@@ -4,6 +4,34 @@ This directory contains the REPACSS in-band (IB) profiling implementation.
 
 The current design is intentionally **Slurm-orchestrated** rather than a thin wrapper around Slurm's native `acct_gather_energy` plugin family. Slurm still provides the control plane and lifecycle hooks, but REPACSS owns the runner lifecycle, staged artifact model, provenance handling, and hybrid OOB+IB reporting flow.
 
+## Audited RAPL profiles
+
+[rapl_profiles.json](rapl_profiles.json) contains static sensor profiles generated from the complete `rapl-audit-20261008T204824Z-1343382` audit. All 119 node inventories were checked against the exported domain structures and signatures before generating these profiles.
+
+| Partition | Profile | Verified nodes | Domains |
+|---|---|---|---|
+| `zen4` | `zen4_rapl` | 110 | Two CPU packages and two `core` domains |
+| `h100` | `h100_host_rapl` | 8 | Two CPU packages, two host DRAM domains, and `psys` |
+| `h100-build` | `h100_host_rapl` | 1 | Same RAPL structure as `h100` |
+
+The two H100 partitions share only their RAPL profile. This file does not configure NVIDIA devices or determine which GPUs a job is allocated.
+
+The configuration has three main sections:
+
+- `partitions` maps each partition to a profile and its exact verified node list. Observed kernel versions are audit metadata, not profile selection criteria.
+- `profiles` preserves the audited root, relative domain paths, names, parent relationships, attribute names, and counter ranges. Each signature is the SHA-256 of the original `domains` list serialized with sorted JSON keys and compact separators; it does not cover the added `domain_groups` classification.
+- `provenance` records the audit timestamp, source artifact hashes, node count, and observed read permissions. The original audit files are evidence references, not runtime dependencies.
+
+Select a profile by the actual allocated partition and verify that the local Slurm node name is in its `verified_nodes`. Resolve each counter as `profile["root"] / domain["energy_path"]`; read `name` and `max_energy_range_uj` under the domain's `path` for startup validation. Use the unique domain path for collector state: both DRAM domains are named `dram`, and both Zen4 core domains are named `core`.
+
+`domain_groups` classifies the observed names; it does not authorize adding all groups together. CPU package totals use only `cpu_package`. Keep `host_dram`, `core`, and `platform` separately identified, and verify the AMD `core` and platform measurement scopes before interpreting them further. Empty groups mean the audit found no corresponding exposed domain.
+
+The audit verified structure and successful reads as UID 0. Every observed `energy_uj` file was owned by UID/GID 0 with mode `0400`. It did not verify counter progression, accuracy, or service-account access. Runtime use still requires appropriate sensor permissions and lightweight checks of the configured files.
+
+**Integration status:** [profiles.py](profiles.py) loads this file and rejects it if any profile signature or path is inconsistent. Compute Prolog passes `SLURM_JOB_PARTITION` and the Slurm node name to the runner. At startup the runner selects the profile, requires the node in `verified_nodes`, and checks each domain's `name`, `max_energy_range_uj`, and `energy_uj` readability once. It writes the result to `rapl_manifest.json` next to `rapl.csv`, including when RAPL is skipped. The collector samples only domains that passed and keys counter state by domain path. A domain that differs from the audit is excluded, and the manifest records why.
+
+The packaged file is the default. Administrators can set `REPACSS_POWER_RAPL_PROFILES` in the slurmd environment to use an installed copy. To check one node by hand as root, run `python3 -m inband.profiles --partition zen4 --sample-seconds 2` from the repository root. The command needs only the standard library, and it exits non-zero unless every domain validates and advances.
+
 ## Why Not Use Only Slurm `acct_gather_energy`
 
 Slurm's built-in `acct_gather_energy` path is designed for cluster-level configuration and native accounting or profiling integration. That model works well when the site wants one selected energy backend and one standardized data path.
@@ -21,7 +49,7 @@ Summary comparison:
 | Aspect | `acct_gather_energy` | REPACSS IB |
 |---|---|---|
 | Activation | Cluster-global via `slurm.conf` | Per-job via user comment `power:inband` |
-| Collector count | Single backend at a time | Multiple in parallel (rapl + nvidia_smi + rocm_smi) |
+| Collector count | Single backend at a time | Multiple in parallel (rapl + nvml + nvidia_smi + rocm_smi) |
 | Data granularity | Primarily node/job energy accounting; detailed time series typically requires `acct_gather_profile` | Full time-series CSV per collector |
 | Data path | Slurm native accounting/profile path (e.g. `sstat`/`sacct`, HDF5, or InfluxDB depending on site configuration) | NFS staged artifacts per node |
 | Storage model | Managed by Slurm's configured accounting/profile plugins | Distributed per-node writes to NFS staging |
@@ -206,7 +234,7 @@ Initial values:
 |---|---|---|
 | `mode` | `oob`, `inband`, `both` | required |
 | `backend` | `db` in v1; valid only for `oob` and `both` | `db` |
-| `collectors` | site allowlist drawn from `rapl`, `nvidia_smi`, `rocm_smi` | site-configured auto-detection |
+| `collectors` | site allowlist drawn from `rapl`, `nvml`, `nvidia_smi`, `rocm_smi` | `rapl`, `nvml`, `rocm_smi`, each skipped where unavailable |
 | `interval_ms` | site-configured bounded integer | `1000` |
 
 The initial proposed interval policy is `250 <= interval_ms <= 60000`. The exact bounds are configuration, not user-controlled policy.
@@ -386,6 +414,12 @@ Acceptance:
 - A transient shared-filesystem outage does not corrupt already closed local chunks.
 - User-controlled strings cannot escape configured roots.
 
+**Implementation status:** [chunks.py](chunks.py), [stager.py](stager.py), and the [stager unit](../shared/slurm/repacss-power-stage@.service) implement this section with the current `<staging_root>/<storage_key>/<hostname>/` layout. The v2 layout arrives with the attempt identity work in section 2. Prolog writes `attempt.json` to `<local_spool_root>/<storage_key>/<hostname>/` and starts the runner. The runner writes 30-second chunks there (`REPACSS_POWER_IB_CHUNK_SECONDS`), takes a final sample after SIGTERM, and writes `node_sealed.json` on every exit path. Epilog sends non-blocking requests to stop the runner and start the stager, and writes nothing to shared storage.
+
+The stager waits for the seal, publishes the sealed inventory, `node_status.json`, and `.done`, and deletes only the published local files. A failed publication exits non-zero with the local spool intact, and the unit's `Restart=on-failure` retries it. If the runner unit stops without a seal, the stager closes the remaining chunks at their last complete line and publishes a `forced_partial` seal.
+
+The inspected Zen4 node (`rpc-92-1`) mounts `/` as an in-memory `rootfs`, so the local spool survives an NFS outage but not a reboot. A reboot also ends the job, so v1 does not copy chunks during the job. Before enabling the stager on NFS, create the staging root and verify that root, or the stager's service identity, can write to it under the export's squash policy.
+
 ### 4. Scope collection to the allocation
 
 Add an explicit allocation record passed from Prolog to the runner:
@@ -427,6 +461,8 @@ Acceptance:
 - No artifact contains an unallocated GPU.
 - A shared-node RAPL sample is never labeled as job-only energy.
 - Every metric has explicit source, scope, unit, and timestamp semantics.
+
+**Implementation status:** `power:inband` and `power:both` require `--exclusive`, because RAPL and the all-GPU NVML collector measure the whole node. Compute Prolog starts collection only when `SLURM_JOB_EXCLUSIVE` is `NODE`; for any other value, or when the variable is missing, it skips the job without failing the hook. The dispatcher records the value in the finalization request, and the finalizer immediately exports a `summary.json` with status `skipped` and the reason instead of waiting for nodes that never start. Submission-time rejection would need the site's `job_submit.lua`, which is not enabled (`JobSubmitPlugins=lua` is commented out in the inspected `slurm.conf`). Enabling it would apply the site's full submission policy to every job, so it is left to the site administrators. Confirm on a canary node that the installed Slurm version exports `SLURM_JOB_EXCLUSIVE` to Prolog; if it does not, every in-band request is skipped.
 
 ### 5. Bound and harden the compute-node lifecycle
 
@@ -563,6 +599,12 @@ A persistent `repacss-power-finalizer.service` coordinates a bounded worker pool
 10. If a crash occurs after publication but before queue completion, the retry verifies the immutable export checksums and completes the queue record rather than duplicating data.
 11. On transient failure, renew/release the lease with bounded exponential backoff. On permanent failure or exhausted retry budget, move the record to `dead` with the error history intact.
 
+**Implementation status:** a functional subset is implemented without leases, a worker pool, or a dead-letter retry policy. For `inband` and `both`, [dispatcher.py](../shared/slurm/dispatcher.py) writes `pending/<attempt_id>.json` under `REPACSS_POWER_IB_QUEUE_ROOT` (default `/var/spool/repacss-power/finalize-queue`) with the expected nodes, job window, and a deadline 600 seconds after enqueue (`REPACSS_POWER_IB_FINALIZE_TIMEOUT_SECONDS`). The attempt ID is the storage key that compute Prolog derives from the same Slurm variables. [finalizer.py](../shared/slurm/finalizer.py), run by the [finalizer unit](../shared/slurm/repacss-power-finalizer.service) or by hand with `python -m shared.slurm.finalizer run --once`, exports an attempt once every expected node has `.done` or the deadline has passed. It moves the record to `complete/`, or to `failed/` after an unexpected error.
+
+[aggregation.py](aggregation.py) verifies each node's RAPL and NVML chunks against `node_status.json` and sums the wrap-corrected deltas per domain, prorating the samples that cross the job start or end. Node and job totals cover `cpu_package`, `host_dram`, and `gpu` separately, and a job total is `null` unless every expected node supplies it. The export goes to `<report_root>/<user>/<job_id>/<attempt_id>/power_profile/` (`REPACSS_POWER_REPORT_ROOT`, falling back to `MONSTER_POWER_BASE`, default `/mnt/SHARED-AREA/power_reports`). It contains `raw_power.csv` with the normalized columns below, `summary.json`, and `provenance.json`. `nvidia_smi` and `rocm_smi` chunks are published but not aggregated. A hybrid job gets the OOB report and the IB export side by side rather than one combined report.
+
+**NVIDIA GPU energy:** the `nvml` collector ([collectors/nvml.py](collectors/nvml.py)) reads each GPU's `nvmlDeviceGetTotalEnergyConsumption` counter (millijoules since driver load, Volta and newer) through ctypes and the driver's `libnvidia-ml.so.1`, so no Python NVML package is needed. Its rows use the RAPL columns, with the GPU UUID as the domain path and `gpu` as the group, so one aggregation path covers CPU and GPU energy. A smaller reading means a driver reload and makes that GPU's energy `null`. On `rpg-93-7` (4x H100 NVL, driver 610.43.02), power derived from the counter over 2 seconds was within 1-2% of `nvidia-smi` `power.draw`. The collector samples every GPU on the node, which is the job's allocation only under the exclusive-node assumption. When a request names no collectors, the default is `rapl`, `nvml`, and `rocm_smi`; `nvidia_smi` runs only on request and records telemetry such as temperature and clocks. A default collector that the node lacks does not make the node partial.
+
 Completion states:
 
 - `complete`: every expected node published valid final status.
@@ -666,6 +708,7 @@ New code uses the `REPACSS_POWER_*` namespace. Existing `MONSTER_POWER_*` settin
 | `shared/slurm/repacss-power-reaper.service` and `.timer` | recover orphan runners and un-staged chunks outside Slurm hooks |
 | `shared/slurm/slurm.prolog` | compose the REPACSS helper with existing ECHO/site logic without replacement |
 | `src/services/slurm.epilogslurmctld` | remove legacy sleep/output creation; retain only a warned compatibility handoff or retire it |
+| `inband/profiles.py` | audited RAPL profile loading, partition/node selection, startup validation, manifest (implemented) |
 | `inband/identity.py` | attempt and safe-token rules |
 | `inband/allocation.py` | GPU/exclusive allocation normalization |
 | `inband/chunks.py` | rotation, atomic publication, checksums |

@@ -2,6 +2,8 @@
 
 This guide provides detailed usage examples, advanced features, and troubleshooting information for the REPACSS Power Measurement client.
 
+For the Slurm integration and deployment changes needed for OOB, in-band, and hybrid profiling, see [Slurm Profiling Modes and Required Changes](SLURM_PROFILING_MODES.md).
+
 ## Table of Contents
 
 - [Excel Reporting](#excel-reporting)

@@ -1,36 +1,54 @@
-"""Slurm-facing helpers for starting and stopping in-band collection."""
+"""Slurm-facing helpers for starting and stopping in-band collection.
+
+Neither hook touches shared storage. Prolog writes node-local state and starts the
+runner, which samples into node-local spool. Epilog sends non-blocking requests to
+stop the runner and to start the stager, then returns. The runner seals its spool
+after SIGTERM, and the stager publishes the sealed inventory and `.done`.
+"""
 
 from __future__ import annotations
 
 import argparse
 import logging
 import os
+import re
 import socket
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
+from inband.chunks import DEFAULT_CHUNK_SECONDS
+from inband.profiles import PROFILE_PATH_ENV
+from inband.stager import ATTEMPT_FILENAME
 from inband.storage import (
     DEFAULT_IB_STORE_ROOT,
+    DEFAULT_LOCAL_SPOOL_ROOT,
     DEFAULT_STATE_DIR,
     build_storage_key,
-    done_marker_path,
-    epoch_cache_path,
-    ensure_node_staging,
     job_state_file_path,
     load_env_file,
-    node_status_path,
-    read_json_file,
-    runner_status_path,
+    node_root_path,
+    spool_node_path,
     unit_env_file_path,
     write_env_file,
-    write_systemd_env_file,
     write_json_file,
+    write_systemd_env_file,
 )
+from shared.errors import CommentParseError
 from shared.slurm.comments import parse_power_comment
-from shared.slurm.resolver import fetch_job_metadata, parse_job_start_epoch
+from shared.slurm.resolver import parse_job_start_epoch
 
 LOGGER = logging.getLogger("repacss_power.inband.hooks")
+SAFE_TOKEN = re.compile(r"[A-Za-z0-9_.-]+")
+# RAPL and NVML measure the whole node, so collection requires `--exclusive`, which
+# Slurm reports as SLURM_JOB_EXCLUSIVE=NODE.
+EXCLUSIVE_NODE = "NODE"
+
+
+def job_exclusive(env: Dict[str, str]) -> str:
+    return (env.get("SLURM_JOB_EXCLUSIVE") or "").strip().upper()
+
 
 def _configure_logging() -> None:
     level = logging.DEBUG if os.environ.get("MONSTER_POWER_DEBUG") == "1" else logging.INFO
@@ -44,51 +62,28 @@ def _required_env(name: str, env: Dict[str, str]) -> str:
     return value
 
 
-def _read_cached_epoch(path: Path) -> Optional[int]:
-    if not path.exists():
-        return None
-    try:
-        return int(path.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return None
+def _safe_token(name: str, value: str) -> str:
+    """Reject values that could escape a directory or a systemd instance name."""
+    if not SAFE_TOKEN.fullmatch(value) or value in {".", ".."}:
+        raise ValueError(f"{name} {value!r} is not a safe path token")
+    return value
 
 
-def _resolve_job_start_epoch(
-    *,
-    env: Dict[str, str],
-    metadata: Dict[str, str],
-    job_id: str,
-    cluster_name: str,
-    ib_store_root: Path,
-) -> int:
-    cache_path = epoch_cache_path(job_id, cluster_name=cluster_name, ib_store_root=ib_store_root)
-    cached = _read_cached_epoch(cache_path)
-    if cached is not None:
-        return cached
+def _job_start_epoch(env: Dict[str, str], job_id: str) -> int:
+    """Every node of a job sees the same start time, so all nodes derive the same key."""
+    parsed = parse_job_start_epoch((env.get("SLURM_JOB_START_TIME") or "").strip())
+    return parsed if parsed is not None else int(job_id)
 
-    raw_candidates = [
-        (env.get("SLURM_JOB_START_TIME") or "").strip(),
-        metadata.get("StartTime", ""),
-    ]
-    candidate: Optional[int] = None
-    for raw in raw_candidates:
-        parsed = parse_job_start_epoch(raw)
-        if parsed is not None:
-            candidate = parsed
-            break
 
-    if candidate is None:
-        candidate = int(job_id)
+def storage_key_from_env(env: Dict[str, str]) -> str:
+    """Derive the attempt's storage key from Slurm's environment.
 
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with cache_path.open("x", encoding="utf-8") as handle:
-            handle.write(f"{candidate}\n")
-    except FileExistsError:
-        cached = _read_cached_epoch(cache_path)
-        if cached is not None:
-            return cached
-    return candidate
+    Compute Prolog and the controller's EpilogSlurmctld both call this, so the
+    finalizer finds the directories that the compute nodes published.
+    """
+    job_id = _required_env("SLURM_JOB_ID", env)
+    cluster_name = (env.get("SLURM_CLUSTER_NAME") or "cluster").strip() or "cluster"
+    return _safe_token("storage key", build_storage_key(job_id, _job_start_epoch(env, job_id), cluster_name=cluster_name))
 
 
 def _hostname(env: Dict[str, str]) -> str:
@@ -103,6 +98,10 @@ def _python_executable(env: Dict[str, str]) -> str:
     return (env.get("MONSTER_POWER_PYTHON") or os.environ.get("MONSTER_POWER_PYTHON") or "python3").strip()
 
 
+def _state_dir(env: Dict[str, str]) -> Path:
+    return Path(env.get("MONSTER_POWER_STATE_DIR") or DEFAULT_STATE_DIR)
+
+
 def _run_systemctl(args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
     systemctl = os.environ.get("MONSTER_POWER_SYSTEMCTL", "systemctl")
     return subprocess.run([systemctl, *args], check=check, capture_output=True, text=True)
@@ -111,50 +110,88 @@ def _run_systemctl(args: list[str], check: bool = True) -> subprocess.CompletedP
 def _build_base_state(env: Dict[str, str]) -> Optional[Dict[str, str]]:
     job_id = _required_env("SLURM_JOB_ID", env)
     job_user = (env.get("SLURM_JOB_USER") or "").strip()
-    metadata = fetch_job_metadata(job_id, env)
-    comment = metadata.get("Comment", "")
-    parsed = parse_power_comment(comment)
+    # Hooks read only the Slurm-provided environment; they never query slurmctld.
+    comment = (env.get("SLURM_JOB_COMMENT") or "").strip()
+    try:
+        parsed = parse_power_comment(comment)
+    except CommentParseError as exc:
+        LOGGER.warning("job %s has an invalid power comment (%s); skipping hook", job_id, exc)
+        return None
     if not parsed.includes_inband:
         LOGGER.info("job %s has no in-band mode in comment; skipping hook", job_id)
         return None
+    if job_exclusive(env) != EXCLUSIVE_NODE:
+        LOGGER.warning(
+            "job %s requested in-band collection without --exclusive (SLURM_JOB_EXCLUSIVE=%s); skipping",
+            job_id,
+            job_exclusive(env) or "unset",
+        )
+        return None
 
     cluster_name = (env.get("SLURM_CLUSTER_NAME") or "cluster").strip() or "cluster"
-    hostname = _hostname(env)
+    hostname = _safe_token("node name", _hostname(env))
+    partition = (env.get("SLURM_JOB_PARTITION") or "").strip()
+    start_epoch = _job_start_epoch(env, job_id)
+    storage_key = storage_key_from_env(env)
     ib_store_root = Path(env.get("MONSTER_POWER_IB_STORE_ROOT") or DEFAULT_IB_STORE_ROOT)
-    start_epoch = _resolve_job_start_epoch(
-        env=env,
-        metadata=metadata,
-        job_id=job_id,
-        cluster_name=cluster_name,
-        ib_store_root=ib_store_root,
-    )
-    storage_key = build_storage_key(job_id, start_epoch, cluster_name=cluster_name)
-    node_root = ensure_node_staging(storage_key, hostname, ib_store_root=ib_store_root)
+    spool_root = Path(env.get("REPACSS_POWER_IB_LOCAL_SPOOL_ROOT") or DEFAULT_LOCAL_SPOOL_ROOT)
+    spool_dir = spool_node_path(storage_key, hostname, spool_root=spool_root)
+    staging_dir = node_root_path(storage_key, hostname, ib_store_root=ib_store_root)
+    chunk_seconds = float(env.get("REPACSS_POWER_IB_CHUNK_SECONDS") or DEFAULT_CHUNK_SECONDS)
+    runner_unit = f"repacss-power-ib@{storage_key}.service"
     collectors = ",".join(parsed.collectors)
     state = {
         "JOB_ID": job_id,
         "JOB_USER": job_user,
         "CLUSTER_NAME": cluster_name,
         "HOSTNAME": hostname,
+        "PARTITION": partition,
         "JOB_START_EPOCH": str(start_epoch),
         "STORAGE_KEY": storage_key,
         "IB_STORE_ROOT": str(ib_store_root),
-        "NODE_OUTPUT_DIR": str(node_root),
+        "SPOOL_DIR": str(spool_dir),
+        "STAGING_DIR": str(staging_dir),
         "INTERVAL_MS": str(parsed.interval_ms),
         "COLLECTORS": collectors,
-        "SYSTEMD_UNIT": f"repacss-power-ib@{storage_key}.service",
+        "SYSTEMD_UNIT": runner_unit,
+        "STAGE_UNIT": f"repacss-power-stage@{storage_key}.service",
         "PYTHONPATH": env.get("PYTHONPATH") or str(_repo_root()),
         "REPACSS_POWER_PYTHON": _python_executable(env),
         "REPACSS_POWER_JOB_ID": job_id,
         "REPACSS_POWER_STORAGE_KEY": storage_key,
-        "REPACSS_POWER_OUTPUT_DIR": str(node_root),
+        "REPACSS_POWER_OUTPUT_DIR": str(spool_dir),
+        "REPACSS_POWER_STAGING_DIR": str(staging_dir),
         "REPACSS_POWER_HOSTNAME": hostname,
+        "REPACSS_POWER_PARTITION": partition,
         "REPACSS_POWER_INTERVAL_MS": str(parsed.interval_ms),
+        "REPACSS_POWER_CHUNK_SECONDS": str(chunk_seconds),
         "REPACSS_POWER_COLLECTORS": collectors,
-        "REPACSS_POWER_RUNNER_STATUS_PATH": str(runner_status_path(storage_key, hostname, ib_store_root=ib_store_root)),
-        "REPACSS_POWER_NODE_STATUS_PATH": str(node_status_path(storage_key, hostname, ib_store_root=ib_store_root)),
+        "REPACSS_POWER_RUNNER_UNIT": runner_unit,
+        "REPACSS_POWER_STATE_DIR": str(_state_dir(env)),
     }
+    profile_path = (env.get(PROFILE_PATH_ENV) or "").strip()
+    if profile_path:
+        state[PROFILE_PATH_ENV] = profile_path
     return state
+
+
+def _attempt_record(state: Dict[str, str]) -> Dict[str, object]:
+    return {
+        "schema_version": 1,
+        "kind": "repacss_attempt",
+        "job_id": state["JOB_ID"],
+        "job_user": state["JOB_USER"],
+        "cluster": state["CLUSTER_NAME"],
+        "hostname": state["HOSTNAME"],
+        "partition": state["PARTITION"],
+        "storage_key": state["STORAGE_KEY"],
+        "job_start_epoch": int(state["JOB_START_EPOCH"]),
+        "collectors": _split_csv(state["COLLECTORS"]),
+        "interval_ms": int(state["INTERVAL_MS"]),
+        "chunk_seconds": float(state["REPACSS_POWER_CHUNK_SECONDS"]),
+        "staging_dir": state["STAGING_DIR"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def run_prolog(env: Optional[Dict[str, str]] = None) -> int:
@@ -163,7 +200,8 @@ def run_prolog(env: Optional[Dict[str, str]] = None) -> int:
     if state is None:
         return 0
 
-    state_dir = Path(env.get("MONSTER_POWER_STATE_DIR") or DEFAULT_STATE_DIR)
+    state_dir = _state_dir(env)
+    write_json_file(Path(state["SPOOL_DIR"]) / ATTEMPT_FILENAME, _attempt_record(state))
     write_env_file(job_state_file_path(state["JOB_ID"], state_dir=state_dir), state)
     write_systemd_env_file(unit_env_file_path(state["STORAGE_KEY"], state_dir=state_dir), state)
 
@@ -177,84 +215,23 @@ def run_prolog(env: Optional[Dict[str, str]] = None) -> int:
     return 0
 
 
-def _load_state_for_epilog(env: Dict[str, str]) -> Dict[str, str]:
-    job_id = _required_env("SLURM_JOB_ID", env)
-    state_dir = Path(env.get("MONSTER_POWER_STATE_DIR") or DEFAULT_STATE_DIR)
-    state = load_env_file(job_state_file_path(job_id, state_dir=state_dir))
-    if state:
-        return state
-
-    LOGGER.warning("state file for job %s is missing; falling back to derived values", job_id)
-    fallback = _build_base_state(env)
-    if fallback is None:
-        return {}
-    return fallback
-
-
-def _systemd_unit_status(unit: str) -> Dict[str, str]:
-    result = _run_systemctl(["show", unit, "--property=Result,ExecMainStatus,SubState"], check=False)
-    payload = {"result": "unknown", "exec_main_status": "", "sub_state": ""}
-    if result.returncode != 0:
-        payload["result"] = "systemctl-show-failed"
-        return payload
-    for line in result.stdout.splitlines():
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if key == "Result":
-            payload["result"] = value
-        elif key == "ExecMainStatus":
-            payload["exec_main_status"] = value
-        elif key == "SubState":
-            payload["sub_state"] = value
-    return payload
-
-
 def run_epilog(env: Optional[Dict[str, str]] = None) -> int:
     env = dict(os.environ if env is None else env)
-    state = _load_state_for_epilog(env)
+    job_id = _required_env("SLURM_JOB_ID", env)
+    state = load_env_file(job_state_file_path(job_id, state_dir=_state_dir(env)))
     if not state:
+        # The job did not request in-band collection here. Never guess a unit name.
+        LOGGER.info("no in-band state for job %s on this node; nothing to stop", job_id)
         return 0
 
-    ib_store_root = Path(state["IB_STORE_ROOT"])
-    storage_key = state["STORAGE_KEY"]
-    hostname = state["HOSTNAME"]
-    unit = state["SYSTEMD_UNIT"]
-
-    stop_result = _run_systemctl(["stop", unit], check=False)
-    unit_status = _systemd_unit_status(unit)
-    runner_status = read_json_file(runner_status_path(storage_key, hostname, ib_store_root=ib_store_root))
-
-    node_state = runner_status.get("state", "failed")
-    message = runner_status.get("message", "")
-    if not runner_status:
-        node_state = "failed"
-        message = "runner_status.json was not written before epilog finalization"
-    elif stop_result.returncode != 0 or unit_status.get("exec_main_status") not in {"", "0"}:
-        node_state = "failed"
-        message = message or f"systemd unit {unit} exited abnormally"
-
-    node_status = {
-        "job_id": state["JOB_ID"],
-        "storage_key": storage_key,
-        "hostname": hostname,
-        "state": node_state,
-        "message": message,
-        "requested_collectors": _split_csv(state.get("COLLECTORS", "")),
-        "runner_status": runner_status,
-        "systemd": {
-            "stop_returncode": stop_result.returncode,
-            "result": unit_status.get("result"),
-            "exec_main_status": unit_status.get("exec_main_status"),
-            "sub_state": unit_status.get("sub_state"),
-        },
-    }
-    write_json_file(node_status_path(storage_key, hostname, ib_store_root=ib_store_root), node_status)
-    done_marker = done_marker_path(storage_key, hostname, ib_store_root=ib_store_root)
-    done_marker.parent.mkdir(parents=True, exist_ok=True)
-    done_marker.touch()
+    # Both requests return immediately, so Epilog cannot time out waiting on them.
+    for args in (["stop", "--no-block", state["SYSTEMD_UNIT"]], ["start", "--no-block", state.get("STAGE_UNIT", "")]):
+        if not args[-1]:
+            continue
+        result = _run_systemctl(args, check=False)
+        if result.returncode != 0:
+            LOGGER.warning("systemctl %s failed: %s", " ".join(args), result.stderr.strip())
+    LOGGER.info("requested stop of %s for job %s", state["SYSTEMD_UNIT"], job_id)
     return 0
 
 
