@@ -26,8 +26,12 @@ def configure_logging() -> None:
         logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s")
 
 
-def dispatch_from_env() -> int:
-    """Dispatch the current Slurm job based on the parsed comment."""
+def dispatch_from_env(inband_only: bool = False) -> int:
+    """Dispatch the current Slurm job based on the parsed comment.
+
+    With `inband_only`, queue the in-band part and return: the caller produces the OOB
+    report itself, as a site wrapper that keeps its own OOB path does.
+    """
     try:
         context = resolve_job_context_from_env()
     except SlurmResolutionError as exc:
@@ -57,7 +61,7 @@ def dispatch_from_env() -> int:
         except Exception as exc:  # pragma: no cover - defensive wrapper
             LOGGER.exception("could not queue in-band finalization for job %s: %s", context.job_id, exc)
 
-    if not parsed.includes_oob:
+    if not parsed.includes_oob or inband_only:
         return 0
 
     if parsed.backend != "db":
@@ -80,9 +84,14 @@ def dispatch_from_env() -> int:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="REPACSS Slurm dispatcher")
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--inband-only",
+        action="store_true",
+        help="Queue only the in-band part of the job; the caller produces the OOB report.",
+    )
+    args = parser.parse_args(argv)
     configure_logging()
-    return dispatch_from_env()
+    return dispatch_from_env(inband_only=args.inband_only)
 
 
 if __name__ == "__main__":

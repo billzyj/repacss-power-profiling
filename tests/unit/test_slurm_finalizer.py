@@ -139,3 +139,30 @@ def test_a_job_without_exclusive_nodes_gets_an_immediate_explanation(tmp_path: P
     summary = read_json_file(target / "summary.json")
     assert summary["status"] == "skipped"
     assert "--exclusive" in summary["reason"] and "OVERSUBSCRIBE=OK" in summary["reason"]
+
+
+def test_inband_only_dispatch_leaves_the_oob_report_to_the_wrapper(tmp_path: Path, monkeypatch):
+    env = {
+        "SLURM_JOB_ID": "778",
+        "SLURM_JOB_USER": "alice",
+        "SLURM_CLUSTER_NAME": "repacss",
+        "SLURM_JOB_NODELIST": "rpc-97-[1-4]",
+        "SLURM_JOB_START_TIME": str(START),
+        "SLURM_JOB_END_TIME": str(START + 10),
+        "SLURM_JOB_COMMENT": "power:both",
+        "SLURM_JOB_OVERSUBSCRIBE": "NO",
+        "REPACSS_POWER_IB_QUEUE_ROOT": str(tmp_path / "queue"),
+    }
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(finalizer, "DEFAULT_QUEUE_ROOT", tmp_path / "queue")
+    fake_oob = types.ModuleType("oob.slurm.epilog_handler")
+    fake_oob.handle_oob_job = lambda context: (_ for _ in ()).throw(AssertionError("the wrapper runs OOB"))
+    monkeypatch.setitem(sys.modules, "oob.slurm.epilog_handler", fake_oob)
+
+    assert dispatcher.main(["--inband-only"]) == 0
+
+    record = read_json_file(tmp_path / "queue" / PENDING / f"{storage_key_from_env(env)}.json")
+    assert record["nodes"] == ["rpc-97-1", "rpc-97-2", "rpc-97-3", "rpc-97-4"]
+    assert record["mode"] == "both"
+    assert not (tmp_path / "queue" / "deliver").exists()
