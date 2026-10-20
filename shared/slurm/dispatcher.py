@@ -65,9 +65,10 @@ def dispatch_from_env() -> int:
         return 0
 
     from oob.slurm.epilog_handler import handle_oob_job
+    from shared.slurm.delivery import enqueue_oob_delivery
 
     try:
-        handle_oob_job(context)
+        enqueue_oob_delivery(context.cluster_name, context.job_id, context.user, handle_oob_job(context), os.environ)
     except OOBBackendError as exc:
         LOGGER.error("oob backend error for job %s: %s", context.job_id, exc)
         return 1

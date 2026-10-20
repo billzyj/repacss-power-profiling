@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
-from inband.chunks import DEFAULT_CHUNK_SECONDS
 from inband.profiles import PROFILE_PATH_ENV
 from inband.stager import ATTEMPT_FILENAME
 from inband.storage import (
@@ -155,7 +154,6 @@ def _build_base_state(env: Dict[str, str]) -> Optional[Dict[str, str]]:
     spool_root = Path(env.get("REPACSS_POWER_IB_LOCAL_SPOOL_ROOT") or DEFAULT_LOCAL_SPOOL_ROOT)
     spool_dir = spool_node_path(storage_key, hostname, spool_root=spool_root)
     staging_dir = node_root_path(storage_key, hostname, ib_store_root=ib_store_root)
-    chunk_seconds = float(env.get("REPACSS_POWER_IB_CHUNK_SECONDS") or DEFAULT_CHUNK_SECONDS)
     runner_unit = f"repacss-power-ib@{storage_key}.service"
     collectors = ",".join(parsed.collectors)
     state = {
@@ -182,7 +180,6 @@ def _build_base_state(env: Dict[str, str]) -> Optional[Dict[str, str]]:
         "REPACSS_POWER_HOSTNAME": hostname,
         "REPACSS_POWER_PARTITION": partition,
         "REPACSS_POWER_INTERVAL_MS": str(parsed.interval_ms),
-        "REPACSS_POWER_CHUNK_SECONDS": str(chunk_seconds),
         "REPACSS_POWER_COLLECTORS": collectors,
         "REPACSS_POWER_RUNNER_UNIT": runner_unit,
         "REPACSS_POWER_STATE_DIR": str(_state_dir(env)),
@@ -206,7 +203,6 @@ def _attempt_record(state: Dict[str, str]) -> Dict[str, object]:
         "job_start_epoch": int(state["JOB_START_EPOCH"]),
         "collectors": _split_csv(state["COLLECTORS"]),
         "interval_ms": int(state["INTERVAL_MS"]),
-        "chunk_seconds": float(state["REPACSS_POWER_CHUNK_SECONDS"]),
         "staging_dir": state["STAGING_DIR"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }

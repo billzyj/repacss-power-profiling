@@ -25,10 +25,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from inband.chunks import (
-    CHUNK_SUFFIX,
-    CHUNKS_DIRNAME,
+from inband.spool import (
     PARTIAL_SUFFIX,
+    SAMPLE_SUFFIX,
+    SAMPLES_DIRNAME,
     SEAL_FILENAME,
     SEAL_FORCED_PARTIAL,
     SEAL_NORMAL,
@@ -47,7 +47,7 @@ NODE_STATUS_FILENAME = "node_status.json"
 DONE_FILENAME = ".done"
 RUNNER_STATUS_FILENAME = "runner_status.json"
 
-# systemctl is-active states in which the runner may still write chunks or its seal.
+# systemctl is-active states in which the runner may still write samples or its seal.
 RUNNER_ALIVE_STATES = {"active", "activating", "deactivating", "reloading"}
 SEAL_CHECK_SECONDS = 2.0
 
@@ -112,16 +112,16 @@ def _identity(config: StageConfig) -> Dict[str, str]:
 def write_forced_seal(config: StageConfig) -> Dict[str, Any]:
     """Seal a spool whose runner exited without sealing it.
 
-    Call only after confirming the runner is no longer running. Open chunks are closed
-    here, keeping only complete lines, because no process will write to them again.
+    Call only after confirming the runner is no longer running. Open sample files are
+    closed here, keeping only complete lines, because no process will write to them again.
     """
-    for partial in sorted(config.spool_dir.glob(f"{CHUNKS_DIRNAME}/*/*{CHUNK_SUFFIX}{PARTIAL_SUFFIX}")):
+    for partial in sorted(config.spool_dir.glob(f"{SAMPLES_DIRNAME}/*{SAMPLE_SUFFIX}{PARTIAL_SUFFIX}")):
         data = partial.read_bytes()
         complete_size = data.rfind(b"\n") + 1
         if data[:complete_size].count(b"\n") < 2:  # no row after the header
             partial.unlink()
             continue
-        # Drop a line the runner was killed while writing, then close the chunk.
+        # Drop a line the runner was killed while writing, then close the file.
         with partial.open("r+b") as handle:
             handle.truncate(complete_size)
             handle.flush()
@@ -160,16 +160,10 @@ def node_status(seal: Dict[str, Any]) -> Dict[str, Any]:
     for entry in seal["files"]:
         if "collector" not in entry:
             continue
-        summary = collectors.setdefault(
-            entry["collector"], {"chunks": 0, "rows": 0, "first_timestamp": "", "last_timestamp": ""}
-        )
-        summary["chunks"] += 1
-        summary["rows"] += entry["rows"]
-        summary["first_timestamp"] = summary["first_timestamp"] or entry["first_timestamp"]
-        summary["last_timestamp"] = entry["last_timestamp"] or summary["last_timestamp"]
+        collectors[entry["collector"]] = {key: entry[key] for key in ("rows", "first_t", "last_t")}
     state = seal["runner_state"] if seal["seal_type"] == SEAL_NORMAL else SEAL_FORCED_PARTIAL
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "repacss_node_status",
         "job_id": seal["job_id"],
         "storage_key": seal["storage_key"],

@@ -286,8 +286,10 @@ Relevant environment variables include:
 By default, `handle_oob_job()` writes under:
 
 ```text
-/var/lib/repacss-power/reports/<user>/<job_id>/
+/var/lib/repacss-power/reports/<user>/<job_id>/oob/
 ```
+
+The in-band report of the same job goes to the sibling `ib/`. After an epilog-mode run, the OOB report is queued for delivery into the job owner's working directory or home (see [shared/slurm/delivery.py](../shared/slurm/delivery.py)); the copy under the report root stays.
 
 Set `MONSTER_POWER_BASE` to change the base directory, or pass `out_dir` explicitly.
 

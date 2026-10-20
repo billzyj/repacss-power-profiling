@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from inband import stager
-from inband.chunks import SEAL_FILENAME, ChunkWriter, write_seal
+from inband.spool import SEAL_FILENAME, SampleWriter, sample_path, write_seal
 from inband.stager import (
     DONE_FILENAME,
     NODE_STATUS_FILENAME,
@@ -18,15 +18,11 @@ from inband.stager import (
 )
 from inband.storage import load_env_file, read_json_file, write_env_file, write_json_file
 
-COLUMNS = ["timestamp", "value"]
-
-
-def _spool(tmp_path: Path, chunks: int = 2) -> Path:
+def _spool(tmp_path: Path, samples: int = 2) -> Path:
     spool = tmp_path / "spool" / "repacss-12345-100" / "rpc-91-1"
-    ticks = iter(range(0, 10_000, 100))  # every write is older than chunk_seconds
-    writer = ChunkWriter(spool / "chunks" / "rapl", COLUMNS, chunk_seconds=50, clock=lambda: next(ticks))
-    for number in range(chunks):
-        writer.write_rows([{"timestamp": f"t{number}", "value": number}])
+    writer = SampleWriter(sample_path(spool, "rapl"), ["intel-rapl:0"])
+    for number in range(samples):
+        writer.write(100.0 + number, [[number]])
     writer.close()
     write_json_file(
         spool / "attempt.json",
@@ -61,12 +57,7 @@ def test_sealed_spool_is_published_with_done_last_and_local_files_removed(tmp_pa
     assert (staging / SEAL_FILENAME).exists()
     status = read_json_file(staging / NODE_STATUS_FILENAME)
     assert status["state"] == "complete"
-    assert status["collectors"]["rapl"] == {
-        "chunks": 2,
-        "rows": 2,
-        "first_timestamp": "t0",
-        "last_timestamp": "t1",
-    }
+    assert status["collectors"]["rapl"] == {"rows": 2, "first_t": 100.0, "last_t": 101.0}
     assert (staging / DONE_FILENAME).exists()
     assert not list(staging.rglob("*.partial"))
     assert not spool.exists() and not spool.parent.exists()
@@ -75,13 +66,13 @@ def test_sealed_spool_is_published_with_done_last_and_local_files_removed(tmp_pa
 def test_failed_verification_leaves_no_done_and_keeps_local_spool(tmp_path: Path, monkeypatch):
     spool = _spool(tmp_path)
     _seal(spool)
-    (spool / "chunks" / "rapl" / "00000002.csv").write_text("changed after sealing\n", encoding="utf-8")
+    sample_path(spool, "rapl").write_text("changed after sealing\n", encoding="utf-8")
     config = _config(tmp_path, spool)
 
     assert run_stager(config) == 1
 
     assert not (config.staging_dir / DONE_FILENAME).exists()
-    assert not (config.staging_dir / "chunks" / "rapl" / "00000002.csv").exists()
+    assert not sample_path(config.staging_dir, "rapl").exists()
     assert (spool / SEAL_FILENAME).exists()
 
 
@@ -106,9 +97,11 @@ def test_existing_destination_with_other_content_is_never_overwritten(tmp_path: 
 
 
 def test_runner_that_exits_without_a_seal_gets_a_forced_seal(tmp_path: Path, monkeypatch):
-    spool = _spool(tmp_path, chunks=1)
+    spool = _spool(tmp_path, samples=0)
     # Killed mid-write: the last line is incomplete.
-    (spool / "chunks" / "rapl" / "00000002.csv.partial").write_bytes(b"timestamp,value\nt8,8\nt9,")
+    partial = sample_path(spool, "rapl").with_name("rapl.csv.partial")
+    partial.parent.mkdir(parents=True)
+    partial.write_bytes(b"t,intel-rapl:0\n108.000,8\n109.000,9\n110.0")
     monkeypatch.setattr(stager, "runner_alive", lambda unit: False)
     config = _config(tmp_path, spool, runner_unit="repacss-power-ib@repacss-12345-100.service")
 
@@ -117,8 +110,8 @@ def test_runner_that_exits_without_a_seal_gets_a_forced_seal(tmp_path: Path, mon
     status = read_json_file(config.staging_dir / NODE_STATUS_FILENAME)
     assert status["state"] == "forced_partial"
     assert status["collectors"]["rapl"]["rows"] == 2
-    recovered = config.staging_dir / "chunks" / "rapl" / "00000002.csv"
-    assert recovered.read_bytes() == b"timestamp,value\nt8,8\n"
+    recovered = sample_path(config.staging_dir, "rapl")
+    assert recovered.read_bytes() == b"t,intel-rapl:0\n108.000,8\n109.000,9\n"
 
 
 def test_without_a_seal_or_runner_unit_the_stager_gives_up(tmp_path: Path):

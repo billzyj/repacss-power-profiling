@@ -6,7 +6,7 @@ LOGFILE="${MONSTER_POWER_LOGFILE:-/var/log/slurm/epilogslurmctld.log}"
 PYTHON="${MONSTER_POWER_PYTHON:-/opt/repacss-power-profiling/.venv/bin/python}"
 DELAY="${MONSTER_POWER_DELAY_SECONDS:-10}"
 
-# Output layout: POWER_BASE/{userid}/{job_id}/
+# Output layout: POWER_BASE/{userid}/{job_id}/oob/ (in-band reports go to .../ib/)
 POWER_BASE="${MONSTER_POWER_BASE:-/var/lib/repacss-power/reports}"
 
 DEBUG="${MONSTER_POWER_DEBUG:-0}"   # set to 1 to enable verbose logs
@@ -28,8 +28,8 @@ dlog "invoked job_id=$JOB_ID user=$RUN_AS nodes=${SLURM_JOB_NODELIST:-} stdout=$
 # Validate python + script (local on headnode)
 if [[ ! -x "$PYTHON" ]]; then log "skip reason=python_not_executable path='$PYTHON'"; exit 0; fi
 
-# Output: POWER_BASE/{userid}/{job_id}/ (raw_power.csv, power_timeseries.pdf, energy_ring.pdf, meta.txt)
-OUTDIR="${POWER_BASE}/${RUN_AS}/${JOB_ID}"
+# Output: POWER_BASE/{userid}/{job_id}/oob/ (raw_power.csv, power_timeseries.pdf, energy_ring.pdf, meta.txt)
+OUTDIR="${POWER_BASE}/${RUN_AS}/${JOB_ID}/oob"
 mkdir -p "$OUTDIR" >>"$LOGFILE" 2>&1 || true
 dlog "output plan outdir='$OUTDIR'"
 

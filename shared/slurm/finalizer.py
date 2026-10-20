@@ -3,16 +3,19 @@
 `enqueue_inband_job` runs inside EpilogSlurmctld through the dispatcher and only
 writes a queue record. The finalizer (`run`, as a service or with `--once`) checks
 each pending record against shared staging. Once every expected node has published
-`.done`, or the record's deadline has passed, it aggregates the staged RAPL data and
-exports:
+`.done`, or the record's deadline has passed, it aggregates the staged raw counter
+readings and exports:
 
-    <report_root>/<user>/<job_id>/<attempt_id>/power_profile/
-        raw_power.csv     normalized long-form power and energy samples
+    <report_root>/<user>/<job_id>/ib/
+        raw_power.csv     one row per sample interval and domain: energy (J) and power (W)
         summary.json      energy, average power, node coverage, status, and notes
         provenance.json   request, node publication records, RAPL manifests
 
-The export is written to a sibling `.partial` directory and renamed into place. An
-existing export is never rewritten.
+The OOB report of the same job goes to `<report_root>/<user>/<job_id>/oob/`. A later
+attempt of a requeued job exports to `ib-<attempt start epoch>/` beside the first. The
+export is written to a sibling `.partial` directory and renamed into place. An existing
+export is never rewritten. Each export is then queued for delivery into the user's own
+directory (see `shared.slurm.delivery`); the copy under the report root stays.
 """
 
 from __future__ import annotations
@@ -29,11 +32,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from inband.aggregation import COUNTER_COLLECTORS, ENERGY_METHOD, RAW_COLUMNS, Window, aggregate_attempt
+from inband.aggregation import COUNTER_COLLECTORS, ENERGY_METHOD, EXPORT_COLUMNS, Window, aggregate_attempt
 from inband.hooks import EXCLUSIVE_NODE, job_exclusive, storage_key_from_env
 from inband.stager import DONE_FILENAME, NODE_STATUS_FILENAME
 from inband.storage import DEFAULT_IB_STORE_ROOT, read_json_file, resolve_storage_key_for_job, write_json_file
 from shared.models import ParsedPowerComment, SlurmJobContext
+from shared.slurm.delivery import enqueue_delivery
 from shared.slurm.finalize_queue import COMPLETE, DEFAULT_QUEUE_ROOT, FAILED, enqueue, pending, settle
 from shared.slurm.resolver import parse_job_start_epoch
 
@@ -43,7 +47,7 @@ DEFAULT_REPORT_ROOT = Path(
     os.environ.get("REPACSS_POWER_REPORT_ROOT") or os.environ.get("MONSTER_POWER_BASE") or "/var/lib/repacss-power/reports"
 )
 DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("REPACSS_POWER_IB_FINALIZE_TIMEOUT_SECONDS", "600"))
-EXPORT_DIRNAME = "power_profile"
+IB_DIRNAME = "ib"
 
 
 @dataclass(frozen=True)
@@ -73,6 +77,7 @@ def build_record(
     collectors: Sequence[str] = (),
     interval_ms: int = 1000,
     exclusive: str = "",
+    work_dir: str = "",
 ) -> Dict[str, Any]:
     return {
         "schema_version": 1,
@@ -89,6 +94,7 @@ def build_record(
         "collectors": list(collectors),
         "interval_ms": interval_ms,
         "exclusive": exclusive,
+        "work_dir": work_dir,
         "enqueued_at": _iso(now),
         "deadline_epoch": now + timeout_seconds,
     }
@@ -117,12 +123,19 @@ def enqueue_inband_job(
         collectors=parsed.collectors,
         interval_ms=parsed.interval_ms,
         exclusive=job_exclusive(env),
+        work_dir=env.get("SLURM_JOB_WORK_DIR", ""),
     )
     return enqueue(queue_root or DEFAULT_QUEUE_ROOT, record)
 
 
 def export_dir(config: FinalizerConfig, record: Mapping[str, Any]) -> Path:
-    return config.report_root / record["user"] / record["job_id"] / record["attempt_id"] / EXPORT_DIRNAME
+    """`ib/` for the job's first exported attempt, `ib-<start epoch>/` for any later one."""
+    job_dir = config.report_root / record["user"] / record["job_id"]
+    first = job_dir / IB_DIRNAME
+    exported = read_json_file(first / "summary.json").get("attempt_id")
+    if exported in (None, record["attempt_id"]):
+        return first
+    return job_dir / f"{IB_DIRNAME}-{record['attempt_id'].rsplit('-', 1)[-1]}"
 
 
 def _locate_job_dir(config: FinalizerConfig, record: Mapping[str, Any]) -> Tuple[Path, List[str]]:
@@ -142,7 +155,7 @@ def _unaggregated_collector_notes(job_dir: Path, nodes: Sequence[str]) -> List[s
     for node in nodes:
         collectors.update(read_json_file(job_dir / node / NODE_STATUS_FILENAME).get("collectors", {}))
     collectors.difference_update(COUNTER_COLLECTORS)
-    return [f"{name} chunks were published but are not aggregated yet." for name in sorted(collectors)]
+    return [f"{name} samples were published but are not aggregated yet." for name in sorted(collectors)]
 
 
 def _write_export(config: FinalizerConfig, record: Mapping[str, Any], job_dir: Path, notes: List[str]) -> Dict[str, Any]:
@@ -157,20 +170,13 @@ def _write_export(config: FinalizerConfig, record: Mapping[str, Any], job_dir: P
         end=datetime.fromtimestamp(record["end_epoch"], tz=timezone.utc) if record.get("end_epoch") else None,
     )
     with (partial / "raw_power.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=RAW_COLUMNS, lineterminator="\n")
+        writer = csv.DictWriter(handle, fieldnames=EXPORT_COLUMNS, lineterminator="\n")
         writer.writeheader()
-        result = aggregate_attempt(
-            job_dir,
-            job_id=record["job_id"],
-            attempt_id=record["attempt_id"],
-            expected_nodes=record["nodes"],
-            window=window,
-            emit=writer.writerow,
-        )
+        result = aggregate_attempt(job_dir, expected_nodes=record["nodes"], window=window, emit=writer.writerow)
 
     finalized_at = datetime.now(timezone.utc).isoformat()
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "repacss_inband_summary",
         "job_id": record["job_id"],
         "attempt_id": record["attempt_id"],
@@ -221,7 +227,7 @@ def _write_skipped_export(config: FinalizerConfig, record: Mapping[str, Any], re
     write_json_file(
         partial / "summary.json",
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "repacss_inband_summary",
             "job_id": record["job_id"],
             "attempt_id": record["attempt_id"],
@@ -273,6 +279,17 @@ def process_queue(config: FinalizerConfig, now: Optional[float] = None) -> int:
         settle(config.queue_root, path, COMPLETE, {**record, "outcome": outcome})
         LOGGER.info("job %s attempt %s: %s -> %s", record["job_id"], record["attempt_id"], outcome["status"], outcome["export_dir"])
         settled += 1
+        try:
+            enqueue_delivery(
+                config.queue_root,
+                cluster=record["cluster"],
+                job_id=record["job_id"],
+                user=record["user"],
+                name=Path(outcome["export_dir"]).name,
+                work_dir=record.get("work_dir", ""),
+            )
+        except OSError as exc:
+            LOGGER.warning("could not queue delivery of job %s: %s", record["job_id"], exc)
     return settled
 
 

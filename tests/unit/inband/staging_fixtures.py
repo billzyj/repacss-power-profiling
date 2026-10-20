@@ -1,4 +1,4 @@
-"""Build staged in-band node directories through the real chunk, seal, and stager code."""
+"""Build staged in-band node directories through the real sample, seal, and stager code."""
 
 from __future__ import annotations
 
@@ -6,8 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Sequence, Tuple
 
-from inband.chunks import ChunkWriter, write_seal
-from inband.collectors.rapl import COUNTER_COLUMNS
+from inband.spool import SampleWriter, sample_path, write_seal
 from inband.stager import StageConfig, run_stager
 from inband.storage import write_json_file
 
@@ -34,36 +33,31 @@ GPU_DOMAINS: Sequence[Domain] = tuple(
 )
 
 
-def _write_counter_chunks(
-    spool: Path, collector: str, node: str, domains: Sequence[Domain], seconds: int, ambiguous: Iterable[str]
+# A RAPL range this small makes every 1 s interval long enough for an unseen wrap.
+AMBIGUOUS_RANGE_UJ = 500_000_000
+WIDE_RANGE_UJ = 10**15
+
+
+def _write_counter_samples(
+    spool: Path, collector: str, domains: Sequence[Domain], seconds: int, ambiguous: Iterable[str]
 ) -> None:
-    """Write `seconds` one-second samples at constant power, plus the collector manifest."""
+    """Write `seconds` one-second raw readings at constant power, plus the collector manifest.
+
+    A domain listed in `ambiguous` gets a wrap-ambiguous RAPL range, or, for NVML, a
+    counter reset at 5 s.
+    """
     ambiguous = set(ambiguous)
-    clock = {"now": 0.0}
-    writer = ChunkWriter(spool / "chunks" / collector, COUNTER_COLUMNS, chunk_seconds=3, clock=lambda: clock["now"])
-    def row(second: int, path: str, name: str, group: str, watts: float):
-        flagged = path in ambiguous and second == 5
-        # RAPL keeps a delta on an ambiguous wrap; NVML writes none after a counter reset.
-        no_delta = second == 0 or (flagged and collector == "nvml")
-        return {
-            "timestamp": (T0 + timedelta(seconds=second)).isoformat(),
-            "elapsed_seconds": second,
-            "hostname": node,
-            "profile": "test",
-            "domain_path": path,
-            "domain_name": name,
-            "domain_group": group,
-            "energy_uj": int(watts * 1_000_000 * second),
-            "delta_uj": "" if no_delta else int(watts * 1_000_000),
-            "interval_seconds": "" if second == 0 else 1.0,
-            "power_watts": "" if no_delta else watts,
-            "wrapped": False,
-            "wrap_ambiguous": flagged,
-        }
+    unit = 1_000_000 if collector == "rapl" else 1_000  # RAPL counts uJ, NVML mJ
+    writer = SampleWriter(sample_path(spool, collector), [path for path, *_ in domains])
+
+    def reading(second: int, path: str, watts: float) -> int:
+        if collector == "nvml" and path in ambiguous and second >= 5:
+            second -= 5  # the driver was reloaded at 5 s
+        return int(watts * unit * second)
 
     for second in range(seconds + 1):
-        clock["now"] = float(second)
-        writer.write_rows([row(second, *domain) for domain in domains])
+        epoch = (T0 + timedelta(seconds=second)).timestamp()
+        writer.write(epoch, [[reading(second, path, watts) for path, _, _, watts in domains]])
     writer.close()
     write_json_file(
         spool / f"{collector}_manifest.json",
@@ -71,7 +65,17 @@ def _write_counter_chunks(
             "status": "ready",
             "reason": "",
             "profile": "test",
-            "domains": [{"path": path, "name": name, "group": group, "status": "ok"} for path, name, group, _ in domains],
+            "counter_unit": "uJ" if collector == "rapl" else "mJ",
+            "domains": [
+                {
+                    "path": path,
+                    "name": name,
+                    "group": group,
+                    "status": "ok",
+                    "max_energy_range_uj": AMBIGUOUS_RANGE_UJ if path in ambiguous else WIDE_RANGE_UJ,
+                }
+                for path, name, group, _ in domains
+            ],
         },
     )
 
@@ -88,9 +92,9 @@ def stage_node(
 ) -> Path:
     """Publish RAPL samples, and NVML samples when `gpu_domains` is given, for one node."""
     spool = spool_root / node
-    _write_counter_chunks(spool, "rapl", node, domains, seconds, ambiguous)
+    _write_counter_samples(spool, "rapl", domains, seconds, ambiguous)
     if gpu_domains:
-        _write_counter_chunks(spool, "nvml", node, gpu_domains, seconds, ambiguous)
+        _write_counter_samples(spool, "nvml", gpu_domains, seconds, ambiguous)
     write_json_file(spool / "runner_status.json", {"state": "complete"})
     write_seal(spool, job_id="777", storage_key=attempt_id, hostname=node, runner_state="complete")
     assert run_stager(StageConfig(spool_dir=spool, staging_dir=staging_job_dir / node, wait_seconds=0)) == 0

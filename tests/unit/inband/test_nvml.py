@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-from inband.collectors import nvml
 from inband.collectors.nvml import NvmlError, NVMLCollector
 
 
@@ -36,43 +33,15 @@ class FakeNvml:
         return self.energies_mj[handle]
 
 
-def _clock(monkeypatch, readings):
-    clock = iter(readings)
-    monkeypatch.setattr(nvml, "time", SimpleNamespace(monotonic=lambda: next(clock)))
-
-
-def test_rows_difference_the_energy_counter_per_gpu(monkeypatch):
+def test_readings_are_the_raw_millijoule_counters_keyed_by_uuid():
     library = FakeNvml([1_000, 5_000])
     collector = NVMLCollector(library_factory=lambda: library)
     assert collector.probe().available
-    _clock(monkeypatch, [10.0, 10.0, 12.0, 12.0])
+    assert collector.csv_columns() == ["GPU-0", "GPU-1"]
+    assert collector.manifest_payload()["counter_unit"] == "mJ"
 
     runtime = collector.prepare_runtime()
-    first = collector.collect_rows(runtime, 0.0)
-    library.energies_mj = [601_000, 1_405_000]  # 600 J and 1400 J later
-    second = collector.collect_rows(runtime, 2.0)
-
-    assert [row["delta_uj"] for row in first] == [None, None]
-    assert [(row["domain_path"], row["domain_name"], row["domain_group"]) for row in second] == [
-        ("GPU-0", "gpu0", "gpu"),
-        ("GPU-1", "gpu1", "gpu"),
-    ]
-    assert [row["delta_uj"] for row in second] == [600_000_000, 1_400_000_000]
-    assert [row["power_watts"] for row in second] == [300.0, 700.0]
-
-
-def test_a_smaller_reading_is_a_counter_reset_without_energy(monkeypatch):
-    library = FakeNvml([900_000])
-    collector = NVMLCollector(library_factory=lambda: library)
-    _clock(monkeypatch, [0.0, 1.0])
-    runtime = collector.prepare_runtime()
-    collector.collect_rows(runtime, 0.0)
-    library.energies_mj = [50]
-
-    (row,) = collector.collect_rows(runtime, 1.0)
-
-    assert row["delta_uj"] is None
-    assert row["wrap_ambiguous"] is True
+    assert collector.collect_rows(runtime) == [{"GPU-0": 1_000, "GPU-1": 5_000}]
 
 
 def test_unreadable_gpus_are_recorded_and_skipped():

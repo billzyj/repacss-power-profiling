@@ -134,6 +134,7 @@ class RaplManifest:
             "root": self.root,
             "kernel": self.kernel,
             "validated_at": self.validated_at,
+            "counter_unit": "uJ",
             "domains": [
                 {
                     "path": domain.path,

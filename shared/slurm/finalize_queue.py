@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, Optional
 
 from inband.storage import write_json_file
 
@@ -23,14 +23,14 @@ def record_path(queue_root: Path, state: str, attempt_id: str) -> Path:
     return queue_root / state / f"{attempt_id}.json"
 
 
-def enqueue(queue_root: Path, record: Mapping[str, Any]) -> Path:
-    """Add a record once. A second EpilogSlurmctld call for the same attempt is a no-op."""
-    attempt_id = str(record["attempt_id"])
+def enqueue(queue_root: Path, record: Mapping[str, Any], key: Optional[str] = None) -> Path:
+    """Add a record once, under `key` or its attempt id. Adding the same key again is a no-op."""
+    key = key or str(record["attempt_id"])
     for state in (PENDING, COMPLETE, FAILED):
-        existing = record_path(queue_root, state, attempt_id)
+        existing = record_path(queue_root, state, key)
         if existing.exists():
             return existing
-    return write_json_file(record_path(queue_root, PENDING, attempt_id), record)
+    return write_json_file(record_path(queue_root, PENDING, key), record)
 
 
 def pending(queue_root: Path) -> List[Path]:

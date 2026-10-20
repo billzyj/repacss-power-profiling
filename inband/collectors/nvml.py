@@ -1,15 +1,14 @@
 """NVIDIA GPU energy collector backed by NVML's total energy counter.
 
 `nvmlDeviceGetTotalEnergyConsumption` reports each GPU's energy since the driver was
-loaded, in millijoules, on Volta and newer GPUs. The collector differences consecutive
-readings exactly as the RAPL collector does, so CPU and GPU energy follow one method.
+loaded, in millijoules, on Volta and newer GPUs. Like the RAPL collector, this one
+records only the raw readings, so CPU and GPU energy follow one method at finalization.
 NVML is the `libnvidia-ml.so.1` library that ships with the driver, called through
 ctypes, so no Python NVML package is needed. curvu reads NVIDIA GPUs through NVML too.
 
-Rows use the RAPL collector's columns: each GPU is a domain whose path is its UUID and
-whose group is `gpu`, and millijoules are stored as microjoules. The 64-bit counter
-does not wrap; a smaller reading means the driver was reloaded, so that interval's
-energy is unknown and the row is flagged `wrap_ambiguous`.
+Each GPU is a domain whose path, and column name, is its UUID and whose group is `gpu`.
+The 64-bit counter does not wrap; a smaller reading means the driver was reloaded, so
+finalization treats that interval's energy as unknown.
 
 The collector samples every GPU on the node. That equals the job's allocation only
 when the job has the node exclusively, which the in-band report already assumes.
@@ -18,12 +17,9 @@ when the job has the node exclusively, which the in-band report already assumes.
 from __future__ import annotations
 
 import ctypes
-import time
-from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from inband.collectors.base import CollectorProbe, PollingCSVCollector
-from inband.collectors.rapl import COUNTER_COLUMNS
 from shared.errors import InbandCollectorError
 
 NVML_LIBRARY = "libnvidia-ml.so.1"
@@ -139,6 +135,7 @@ class NVMLCollector(PollingCSVCollector):
             "status": status,
             "reason": self._error or ("" if devices else "NVML reported no GPUs"),
             "driver_version": self._driver_version,
+            "counter_unit": "mJ",
             "domains": [
                 {
                     "path": device["uuid"],
@@ -165,52 +162,16 @@ class NVMLCollector(PollingCSVCollector):
         )
 
     def csv_columns(self) -> List[str]:
-        return list(COUNTER_COLUMNS)
+        return [device["uuid"] for device in self._usable()]
 
     def prepare_runtime(self) -> Dict[str, Any]:
-        return {"devices": self._usable(), "previous": {}}
+        return {"devices": self._usable()}
 
-    def collect_rows(self, runtime: Dict[str, Any], elapsed_seconds: float) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = []
-        timestamp = datetime.now(timezone.utc).isoformat()
-        hostname = self.hostname()
+    def collect_rows(self, runtime: Dict[str, Any]) -> List[Dict[str, Any]]:
+        readings: Dict[str, Any] = {}
         for device in runtime["devices"]:
             try:
-                energy_uj = self._library.energy_mj(device["handle"]) * 1000
+                readings[device["uuid"]] = self._library.energy_mj(device["handle"])
             except NvmlError:
-                # A failed read shows up as a longer interval on the next row.
-                continue
-            read_at = time.monotonic()
-
-            delta_uj = interval_seconds = power_watts = None
-            reset = False
-            previous = runtime["previous"].get(device["uuid"])
-            if previous is not None:
-                previous_uj, previous_at = previous
-                interval_seconds = round(read_at - previous_at, 6)
-                if energy_uj >= previous_uj:
-                    delta_uj = energy_uj - previous_uj
-                    if interval_seconds > 0:
-                        power_watts = round(delta_uj / 1_000_000.0 / interval_seconds, 6)
-                else:
-                    reset = True  # the driver was reloaded; this interval's energy is unknown
-            runtime["previous"][device["uuid"]] = (energy_uj, read_at)
-
-            rows.append(
-                {
-                    "timestamp": timestamp,
-                    "elapsed_seconds": round(elapsed_seconds, 6),
-                    "hostname": hostname,
-                    "profile": self.name,
-                    "domain_path": device["uuid"],
-                    "domain_name": f"gpu{device['index']}",
-                    "domain_group": GPU_GROUP,
-                    "energy_uj": energy_uj,
-                    "delta_uj": delta_uj,
-                    "interval_seconds": interval_seconds,
-                    "power_watts": power_watts,
-                    "wrapped": False,
-                    "wrap_ambiguous": reset,
-                }
-            )
-        return rows
+                continue  # a failed read becomes an empty cell and a longer interval
+        return [readings] if readings else []

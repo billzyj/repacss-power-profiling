@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from inband.collectors.base import CollectorProbe, PollingCSVCollector
 
@@ -74,6 +73,19 @@ class NvidiaSMICollector(PollingCSVCollector):
     def __init__(self, binary: str = "nvidia-smi"):
         self.binary = binary
 
+    def manifest_payload(self) -> Optional[Dict[str, Any]]:
+        """Map each sample file's `gpu_index` to the GPU's UUID and model."""
+        binary_path = shutil.which(self.binary)
+        try:
+            gpus = query_nvidia_smi(binary_path) if binary_path else []
+        except Exception:
+            gpus = []
+        return {
+            "schema_version": 1,
+            "kind": "repacss_nvidia_smi_manifest",
+            "gpus": [{"index": gpu["gpu_index"], "uuid": gpu["gpu_uuid"], "name": gpu["gpu_name"]} for gpu in gpus],
+        }
+
     def probe(self) -> CollectorProbe:
         binary_path = shutil.which(self.binary)
         if binary_path is None:
@@ -101,12 +113,7 @@ class NvidiaSMICollector(PollingCSVCollector):
 
     def csv_columns(self) -> List[str]:
         return [
-            "timestamp",
-            "elapsed_seconds",
-            "hostname",
             "gpu_index",
-            "gpu_uuid",
-            "gpu_name",
             "power_watts",
             "temperature_c",
             "utilization_gpu_percent",
@@ -120,17 +127,5 @@ class NvidiaSMICollector(PollingCSVCollector):
         binary_path = shutil.which(self.binary) or self.binary
         return {"binary": binary_path}
 
-    def collect_rows(self, runtime: Dict[str, Any], elapsed_seconds: float) -> List[Dict[str, Any]]:
-        timestamp = datetime.now(timezone.utc).isoformat()
-        hostname = self.hostname()
-        rows = []
-        for gpu_row in query_nvidia_smi(runtime["binary"]):
-            rows.append(
-                {
-                    "timestamp": timestamp,
-                    "elapsed_seconds": round(elapsed_seconds, 6),
-                    "hostname": hostname,
-                    **gpu_row,
-                }
-            )
-        return rows
+    def collect_rows(self, runtime: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return query_nvidia_smi(runtime["binary"])

@@ -12,6 +12,7 @@ from typing import Optional
 import click
 
 from inband.collectors import build_collectors, probe_collectors, select_collectors
+from inband.spool import sample_path
 from inband.storage import (
     DEFAULT_IB_STORE_ROOT,
     done_marker_path,
@@ -121,7 +122,7 @@ def probe_command(collectors, partition: str, node: Optional[str]):
     type=click.Path(path_type=Path),
     default=Path("output") / "inband-debug",
     show_default=True,
-    help="Directory for collector chunks, written under chunks/<collector>/.",
+    help="Directory for collector samples, written as samples/<collector>.csv.",
 )
 @_node_options
 def sample_command(
@@ -142,9 +143,9 @@ def sample_command(
     handles = []
     try:
         for collector in instances:
-            chunk_dir = output_dir / "chunks" / collector.name
-            handles.append(collector.start(interval_ms=interval_ms, output_dir=chunk_dir))
-            click.echo(f"started {collector.name} -> {chunk_dir}")
+            path = sample_path(output_dir, collector.name)
+            handles.append(collector.start(interval_ms=interval_ms, output_path=path))
+            click.echo(f"started {collector.name} -> {path}")
         time.sleep(duration_s)
     except InbandCollectorError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -153,7 +154,7 @@ def sample_command(
             result = collector.stop(handle)
             click.echo(
                 f"{result.collector_name}: status={result.status} samples={result.sample_count} "
-                f"chunks={len(result.chunks)} output={result.output_dir}"
+                f"output={result.output_path}"
             )
             if result.message:
                 click.echo(f"  message: {result.message}")

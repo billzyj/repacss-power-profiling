@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from inband.chunks import CHUNKS_DIRNAME, DEFAULT_CHUNK_SECONDS, write_seal
+from inband.spool import sample_path, write_seal
 from inband.collectors import build_collectors
 from inband.collectors.base import CollectorResult
 from inband.storage import write_json_file
@@ -66,8 +66,7 @@ def _collector_result_payload(result: CollectorResult) -> Dict[str, object]:
     return {
         "status": result.status,
         "sample_count": result.sample_count,
-        "chunk_count": len(result.chunks),
-        "output_dir": str(result.output_dir),
+        "output_path": str(result.output_path) if result.output_path else "",
         "message": result.message,
     }
 
@@ -79,9 +78,6 @@ def _coerce_args_from_env(args: argparse.Namespace) -> argparse.Namespace:
     args.hostname = args.hostname or os.environ.get("REPACSS_POWER_HOSTNAME") or socket.gethostname()
     args.partition = args.partition or os.environ.get("REPACSS_POWER_PARTITION", "")
     args.interval_ms = args.interval_ms or int(os.environ.get("REPACSS_POWER_INTERVAL_MS", "1000"))
-    args.chunk_seconds = args.chunk_seconds or float(
-        os.environ.get("REPACSS_POWER_CHUNK_SECONDS", str(DEFAULT_CHUNK_SECONDS))
-    )
     if not args.collector:
         args.collector = tuple(_split_collectors(os.environ.get("REPACSS_POWER_COLLECTORS", "")))
     return args
@@ -170,11 +166,7 @@ def run_runner(args: argparse.Namespace) -> int:
             if not probe.available:
                 skipped_collectors.append({"name": collector.name, "reason": probe.reason})
                 continue
-            handle = collector.start(
-                interval_ms=args.interval_ms,
-                output_dir=output_dir / CHUNKS_DIRNAME / collector.name,
-                chunk_seconds=args.chunk_seconds,
-            )
+            handle = collector.start(interval_ms=args.interval_ms, output_path=sample_path(output_dir, collector.name))
             active.append((collector, handle))
             started_collectors.append(collector.name)
     except Exception as exc:
@@ -219,7 +211,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hostname", default="")
     parser.add_argument("--partition", default="")
     parser.add_argument("--interval-ms", type=int, default=0)
-    parser.add_argument("--chunk-seconds", type=float, default=0.0, help="Chunk rotation interval.")
     parser.add_argument("--collector", action="append", default=[])
     return parser
 

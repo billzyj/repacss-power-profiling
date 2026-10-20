@@ -22,10 +22,12 @@ def _config(tmp_path: Path) -> FinalizerConfig:
     )
 
 
-def _queue(config: FinalizerConfig, nodes, now: float, timeout: float = 600.0, exclusive: str = "NODE"):
+def _queue(
+    config: FinalizerConfig, nodes, now: float, timeout: float = 600.0, exclusive: str = "NODE", attempt_id: str = "repacss-777-100"
+):
     record = build_record(
         job_id="777",
-        attempt_id="repacss-777-100",
+        attempt_id=attempt_id,
         cluster="repacss",
         user="alice",
         nodes=nodes,
@@ -61,7 +63,7 @@ def test_finalizer_exports_once_into_the_documented_layout(tmp_path: Path):
 
     assert process_queue(config, now=1000.0) == 1
 
-    target = tmp_path / "reports" / "alice" / "777" / "repacss-777-100" / "power_profile"
+    target = tmp_path / "reports" / "alice" / "777" / "ib"
     assert target == export_dir(config, record)
     assert sorted(path.name for path in target.iterdir()) == ["provenance.json", "raw_power.csv", "summary.json"]
     summary = read_json_file(target / "summary.json")
@@ -71,9 +73,25 @@ def test_finalizer_exports_once_into_the_documented_layout(tmp_path: Path):
     assert provenance["nodes"]["rpg-93-1"]["node_status"]["state"] == "complete"
     assert not list(target.parent.glob(".*partial"))
 
+    delivery = read_json_file(config.queue_root / "deliver" / PENDING / "repacss-777-ib.json")
+    assert (delivery["user"], delivery["job_id"], delivery["name"]) == ("alice", "777", "ib")
+
     # A repeated record for the same attempt never rewrites the export.
     _queue(config, ["rpg-93-1"], now=2000.0)
     assert process_queue(config, now=2000.0) == 0
+
+
+def test_a_requeued_attempt_exports_beside_the_first(tmp_path: Path):
+    config = _config(tmp_path)
+    for attempt in ("repacss-777-100", "repacss-777-200"):
+        stage_node(config.staging_root / attempt, tmp_path / "spool" / attempt, "rpg-93-1", attempt_id=attempt)
+        _queue(config, ["rpg-93-1"], now=1000.0, attempt_id=attempt)
+        assert process_queue(config, now=1000.0) == 1
+
+    job_dir = tmp_path / "reports" / "alice" / "777"
+    assert sorted(path.name for path in job_dir.iterdir()) == ["ib", "ib-200"]
+    assert read_json_file(job_dir / "ib-200" / "summary.json")["attempt_id"] == "repacss-777-200"
+    assert (config.queue_root / "deliver" / PENDING / "repacss-777-ib-200.json").exists()
 
 
 def test_dispatcher_queues_inband_jobs_under_the_compute_node_key(tmp_path: Path, monkeypatch):
@@ -86,13 +104,15 @@ def test_dispatcher_queues_inband_jobs_under_the_compute_node_key(tmp_path: Path
         "SLURM_JOB_END_TIME": str(START + 10),
         "SLURM_JOB_COMMENT": "power:both;collectors=rapl",
         "SLURM_JOB_OVERSUBSCRIBE": "NO",  # what Slurm 25.11 gives EpilogSlurmctld for --exclusive
+        "SLURM_JOB_WORK_DIR": "/home/alice/run",
+        "REPACSS_POWER_IB_QUEUE_ROOT": str(tmp_path / "queue"),
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(finalizer, "DEFAULT_QUEUE_ROOT", tmp_path / "queue")
     oob_jobs = []
     fake_oob = types.ModuleType("oob.slurm.epilog_handler")
-    fake_oob.handle_oob_job = oob_jobs.append
+    fake_oob.handle_oob_job = lambda context: oob_jobs.append(context) or tmp_path / "reports" / "alice" / "777" / "oob"
     monkeypatch.setitem(sys.modules, "oob.slurm.epilog_handler", fake_oob)
 
     assert dispatcher.dispatch_from_env() == 0
@@ -102,7 +122,10 @@ def test_dispatcher_queues_inband_jobs_under_the_compute_node_key(tmp_path: Path
     assert record["nodes"] == ["rpg-93-1", "rpg-93-2"]
     assert record["end_epoch"] == START + 10
     assert record["exclusive"] == "NODE"
+    assert record["work_dir"] == "/home/alice/run"
     assert [context.job_id for context in oob_jobs] == ["777"]  # hybrid keeps the OOB path
+    oob_delivery = read_json_file(tmp_path / "queue" / "deliver" / PENDING / "repacss-777-oob.json")
+    assert (oob_delivery["name"], oob_delivery["work_dir"]) == ("oob", "/home/alice/run")
 
 
 def test_a_job_without_exclusive_nodes_gets_an_immediate_explanation(tmp_path: Path):

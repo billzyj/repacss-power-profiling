@@ -1,0 +1,19 @@
+[Unit]
+Description=REPACSS power report delivery into job owners' directories
+After=network-online.target remote-fs.target
+
+[Service]
+Type=simple
+# Root only so that each delivery can switch to the job owner before it touches a path;
+# see shared/slurm/delivery.py. The finalizer and the OOB handler keep running as
+# SlurmUser and write the shared copy that delivery leaves in place. Site paths belong
+# in the EnvironmentFile: REPACSS_POWER_IB_QUEUE_ROOT, REPACSS_POWER_REPORT_ROOT.
+User=root
+WorkingDirectory=/opt/repacss-power-profiling
+EnvironmentFile=-/etc/repacss-power/finalizer.env
+ExecStart=/opt/repacss-power-profiling/.venv/bin/python -m shared.slurm.delivery run
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

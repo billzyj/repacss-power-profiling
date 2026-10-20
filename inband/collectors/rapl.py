@@ -2,20 +2,19 @@
 
 The collector does not discover domains at runtime. It samples only the domains that
 the audited profile for this node's partition lists and that passed startup
-validation (see `inband.profiles`). Counter state is keyed by each domain's path
+validation (see `inband.profiles`). Each domain's column is named by its path
 relative to the profile root, because names repeat across sockets (`dram`, `core`).
 
-Counter arithmetic follows curvu's read-only `read_power`: a smaller reading than
-the previous one means the counter wrapped once, and the delta adds the remaining
-range. One wrap is distinguishable only when an interval is shorter than the time
-the counter needs to wrap. Each row therefore records its measured interval and
-flags intervals long enough that more than one wrap may have occurred.
+The collector records each domain's raw `energy_uj` reading and nothing derived from
+it. Counter arithmetic happens at finalization (see `inband.aggregation`) and follows
+curvu's read-only `read_power`: a smaller reading than the previous one means the
+counter wrapped once, and the delta adds the remaining range. One wrap is
+distinguishable only when an interval is shorter than the time the counter needs to
+wrap, so longer intervals are flagged as ambiguous there.
 """
 
 from __future__ import annotations
 
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,24 +25,6 @@ from inband.profiles import RaplManifest, resolve_manifest
 # the audited Zen4 and H100 host CPUs, so it gives a conservative wrap bound: about
 # 65 s for the Zen4 counter range and 262 s for the Intel package range.
 RAPL_POWER_CEILING_W = 1000.0
-
-# Columns shared by every energy-counter collector (RAPL and NVML), so one aggregation
-# path handles CPU and GPU energy. A "domain" is any scope with its own counter.
-COUNTER_COLUMNS = [
-    "timestamp",
-    "elapsed_seconds",
-    "hostname",
-    "profile",
-    "domain_path",
-    "domain_name",
-    "domain_group",
-    "energy_uj",
-    "delta_uj",
-    "interval_seconds",
-    "power_watts",
-    "wrapped",
-    "wrap_ambiguous",
-]
 
 
 def counter_delta_uj(previous_uj: int, current_uj: int, max_energy_range_uj: int) -> Tuple[int, bool]:
@@ -110,56 +91,16 @@ class RAPLCollector(PollingCSVCollector):
         return CollectorProbe(name=self.name, available=True, reason="", details=details)
 
     def csv_columns(self) -> List[str]:
-        return list(COUNTER_COLUMNS)
+        return [domain.path for domain in self.manifest().usable_domains()]
 
     def prepare_runtime(self) -> Dict[str, Any]:
-        manifest = self.manifest()
-        return {
-            "profile": manifest.profile_id,
-            "domains": manifest.usable_domains(),
-            "previous": {},
-        }
+        return {"domains": self.manifest().usable_domains()}
 
-    def collect_rows(self, runtime: Dict[str, Any], elapsed_seconds: float) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = []
-        timestamp = datetime.now(timezone.utc).isoformat()
-        hostname = self.hostname()
+    def collect_rows(self, runtime: Dict[str, Any]) -> List[Dict[str, Any]]:
+        readings: Dict[str, Any] = {}
         for domain in runtime["domains"]:
             try:
-                energy_uj = int(domain.energy_file.read_text(encoding="utf-8").strip())
+                readings[domain.path] = int(domain.energy_file.read_text(encoding="utf-8").strip())
             except (OSError, ValueError):
-                # A failed read shows up as a longer interval on the next row.
-                continue
-            read_at = time.monotonic()
-
-            delta_uj = interval_seconds = power_watts = None
-            wrapped = wrap_ambiguous = False
-            previous = runtime["previous"].get(domain.path)
-            if previous is not None:
-                previous_uj, previous_at = previous
-                delta_uj, wrapped = counter_delta_uj(previous_uj, energy_uj, domain.max_energy_range_uj)
-                interval_seconds = read_at - previous_at
-                if interval_seconds > 0:
-                    power_watts = round(delta_uj / 1_000_000.0 / interval_seconds, 6)
-                wrap_ambiguous = interval_seconds >= wrap_safe_seconds(domain.max_energy_range_uj)
-                interval_seconds = round(interval_seconds, 6)
-            runtime["previous"][domain.path] = (energy_uj, read_at)
-
-            rows.append(
-                {
-                    "timestamp": timestamp,
-                    "elapsed_seconds": round(elapsed_seconds, 6),
-                    "hostname": hostname,
-                    "profile": runtime["profile"],
-                    "domain_path": domain.path,
-                    "domain_name": domain.name,
-                    "domain_group": domain.group,
-                    "energy_uj": energy_uj,
-                    "delta_uj": delta_uj,
-                    "interval_seconds": interval_seconds,
-                    "power_watts": power_watts,
-                    "wrapped": wrapped,
-                    "wrap_ambiguous": wrap_ambiguous,
-                }
-            )
-        return rows
+                continue  # a failed read becomes an empty cell and a longer interval
+        return [readings] if readings else []

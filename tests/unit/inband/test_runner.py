@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 from inband import runner
-from inband.chunks import SEAL_FILENAME
+from inband.spool import SEAL_FILENAME
 from inband.collectors.base import CollectorProbe
 from inband.storage import read_json_file
 from tests.unit.inband.test_collectors_base import DummyCollector
@@ -47,21 +47,21 @@ def test_runner_records_why_rapl_was_skipped_and_seals(tmp_path: Path, monkeypat
     assert [entry["path"] for entry in seal["files"]] == ["rapl_manifest.json", "runner_status.json"]
 
 
-def test_runner_writes_chunks_and_seals_them_after_sigterm(tmp_path: Path, monkeypatch):
+def test_runner_writes_one_sample_file_per_collector_and_seals_it_after_sigterm(tmp_path: Path, monkeypatch):
     handlers = {}
     monkeypatch.setattr(runner.signal, "signal", lambda signum, handler: handlers.setdefault(signum, handler))
     monkeypatch.setattr(runner, "build_collectors", lambda names, partition, node: [DummyCollector()])
     stopper = threading.Timer(0.15, lambda: handlers[signal.SIGTERM](signal.SIGTERM, None))
     stopper.start()
 
-    assert runner.run_runner(_args(tmp_path, "--chunk-seconds", "0.05")) == 0
+    assert runner.run_runner(_args(tmp_path)) == 0
 
     status = read_json_file(tmp_path / "runner_status.json")
     assert status["state"] == "complete"
     seal = read_json_file(tmp_path / SEAL_FILENAME)
-    chunks = [entry for entry in seal["files"] if entry.get("collector") == "dummy"]
-    assert len(chunks) == status["collector_results"]["dummy"]["chunk_count"] >= 2
-    assert sum(entry["rows"] for entry in chunks) == status["collector_results"]["dummy"]["sample_count"]
+    (samples,) = [entry for entry in seal["files"] if entry.get("collector") == "dummy"]
+    assert samples["path"] == "samples/dummy.csv"
+    assert samples["rows"] == status["collector_results"]["dummy"]["sample_count"] >= 2
     assert not list(tmp_path.rglob("*.partial"))
 
 

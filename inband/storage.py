@@ -10,7 +10,7 @@ from typing import Any, Dict, Mapping, Optional
 
 DEFAULT_IB_STORE_ROOT = Path(os.environ.get("MONSTER_POWER_IB_STORE_ROOT", "/var/lib/repacss-power/staging"))
 DEFAULT_STATE_DIR = Path(os.environ.get("MONSTER_POWER_STATE_DIR", "/run/repacss-power"))
-# Node-local spool for chunks the runner writes; the stager copies them to staging.
+# Node-local spool for the sample files the runner writes; the stager copies them to staging.
 DEFAULT_LOCAL_SPOOL_ROOT = Path(os.environ.get("REPACSS_POWER_IB_LOCAL_SPOOL_ROOT", "/var/spool/repacss-power"))
 
 

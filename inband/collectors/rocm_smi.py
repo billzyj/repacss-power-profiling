@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 from inband.collectors.base import CollectorProbe, PollingCSVCollector
@@ -107,31 +106,11 @@ class ROCMSMICollector(PollingCSVCollector):
         )
 
     def csv_columns(self) -> List[str]:
-        return [
-            "timestamp",
-            "elapsed_seconds",
-            "hostname",
-            "device",
-            "power_watts",
-            "temperature_c",
-            "utilization_gpu_percent",
-        ]
+        return ["device", "power_watts", "temperature_c", "utilization_gpu_percent"]
 
     def prepare_runtime(self) -> Dict[str, Any]:
         binary_path = shutil.which(self.binary) or self.binary
         return {"binary": binary_path}
 
-    def collect_rows(self, runtime: Dict[str, Any], elapsed_seconds: float) -> List[Dict[str, Any]]:
-        timestamp = datetime.now(timezone.utc).isoformat()
-        hostname = self.hostname()
-        rows = []
-        for gpu_row in query_rocm_smi(runtime["binary"]):
-            rows.append(
-                {
-                    "timestamp": timestamp,
-                    "elapsed_seconds": round(elapsed_seconds, 6),
-                    "hostname": hostname,
-                    **gpu_row,
-                }
-            )
-        return rows
+    def collect_rows(self, runtime: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return query_rocm_smi(runtime["binary"])

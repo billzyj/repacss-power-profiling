@@ -147,24 +147,24 @@ The site also supports the shorter form, using configured defaults:
 sbatch --comment='power:inband' job.sbatch
 ```
 
-The completed attempt is delivered to a deterministic user-readable directory:
+The finished report is always written to the shared report root, next to the job's OOB report, and that copy stays:
 
 ```text
-<report_root>/<uid>/<job_id>/<attempt_id>/
-├── power_profile/
-│   ├── raw_power.csv
-│   └── summary.json
-└── provenance.json
+<report_root>/<user>/<job_id>/
+├── oob/          OOB report: raw_power.csv, plots, meta.txt
+└── ib/           IB report: raw_power.csv, summary.json, provenance.json
 ```
 
-This attempt directory is the `POWER_EXPORT_DIR` defined by the REPACSS power export contract. Directories are owned by the job UID/GID with mode `0750`; regular files use mode `0640` or stricter.
+A later attempt of a requeued job exports to `ib-<attempt start epoch>/`. The delivery service ([shared/slurm/delivery.py](../shared/slurm/delivery.py)) then copies each report, as the job owner, to `<work_dir>/power_reports/<job_id>/<oob|ib>/`, or to `~/power_reports/<job_id>/` when the working directory is unusable on the finalizer host.
+
+The delivered copy is owned by the job UID/GID. The shared copy is written by SlurmUser.
 
 The IB path must remain structurally different from OOB:
 
 - OOB performs a post-job query against a central telemetry backend.
 - IB samples on the allocated compute nodes while the job is running.
 - OOB can produce a result without node-local services.
-- IB publishes job-local chunks and statuses, then an asynchronous finalizer assembles files.
+- IB publishes job-local sample files and statuses, then an asynchronous finalizer assembles files.
 - A pure `power:inband` job must work when the OOB database and API are unavailable.
 
 ### Target architecture
@@ -189,8 +189,8 @@ compute-node Prolog on every allocated node
   v
 per-job/per-node runner
   - sample only allowed and allocated devices
-  - rotate closed chunks
-  - hand closed chunks to the node-side stager
+  - append raw readings to one local file per collector
+  - seal the file inventory when stopped
   |
   v
 compute-node Epilog
@@ -199,7 +199,7 @@ compute-node Epilog
   |
   v
 node-side stager
-  - copy and checksum closed chunks into shared staging
+  - copy and checksum the sealed sample files into shared staging
   - publish node_status.json
   - create .done last
   |
@@ -213,7 +213,7 @@ EpilogSlurmctld dispatcher
   v
 headnode finalizer service
   - wait for expected .done markers with a deadline
-  - validate and normalize chunks
+  - validate the sample files and derive energy and power
   - classify complete / partial / failed
   - atomically publish the user-facing export
 ```
@@ -348,25 +348,24 @@ Use this shared staging layout:
 ├── manifest.json
 ├── nodes/
 │   └── <hostname>/
-│       ├── chunks/
-│       │   ├── rapl/
-│       │   │   └── 00000001.csv
-│       │   ├── nvidia_smi/
-│       │   │   └── 00000001.csv
-│       │   └── rocm_smi/
-│       │       └── 00000001.csv
+│       ├── samples/
+│       │   ├── rapl.csv
+│       │   ├── nvml.csv
+│       │   └── nvidia_smi.csv
+│       ├── rapl_manifest.json
+│       ├── nvml_manifest.json
 │       ├── runner_status.json
 │       ├── node_status.json
 │       └── .done
 └── finalization_status.json
 ```
 
-The production local spool contains recovery metadata as well as chunks:
+The production local spool contains recovery metadata as well as sample files:
 
 ```text
 <local_spool_root>/<attempt_id>/<hostname>/
 ├── attempt.json
-├── chunks/
+├── samples/
 ├── runner_status.json
 └── node_sealed.json
 ```
@@ -378,47 +377,49 @@ Storage rules:
 - Use `0750` directories, `0640` data/status files, and `umask 0027`.
 - Prolog must not require shared storage to start local collection. It first writes durable local `attempt.json`, including the trusted request hash and configured shared target.
 - The stager publishes shared `request.json` with create-if-absent semantics. Concurrent nodes may accept a byte-identical record, but any mismatch marks the attempt invalid instead of selecting one writer.
-- Write JSON and chunks to a sibling `.partial` file, flush, `fsync`, close, and `os.replace` within the destination filesystem.
+- Write JSON and sample files to a sibling `.partial` file, flush, `fsync`, close, and `os.replace` within the destination filesystem.
 - Never rename a local-spool file directly to NFS. Copy it to an NFS-side `.partial`, verify size and SHA-256, then rename within NFS.
 - Readers ignore `.partial` files.
-- `node_status.json` records chunk names, sizes, checksums, sample counts, collector results, and time bounds.
-- After the final chunk is closed, the runner atomically writes `node_sealed.json` containing the complete immutable chunk inventory, sizes, checksums, terminal runner status, and request hash.
-- The stager may copy closed chunks early, but it must not publish final `node_status.json` or `.done` until it has read the seal and verified every item in the sealed inventory.
-- If the runner is killed before sealing, reconciliation may create an explicit `forced_partial` seal only after proving the producer is no longer active; it inventories closed chunks and records the abnormal termination.
+- `node_status.json` records sample file names, sizes, checksums, row counts, collector results, and time bounds.
+- After every sample file is closed, the runner atomically writes `node_sealed.json` containing the complete immutable file inventory, sizes, checksums, terminal runner status, and request hash.
+- The stager must not publish final `node_status.json` or `.done` until it has read the seal and verified every item in the sealed inventory.
+- If the runner is killed before sealing, reconciliation may create an explicit `forced_partial` seal only after proving the producer is no longer active; it closes open sample files at their last complete line and records the abnormal termination.
 - `.done` is an atomic final marker written last. It means the sealed node inventory has finished publishing, not that every collector succeeded.
-- An export is immutable after publication. Late chunks are recorded for operator review. An explicit re-finalize operation writes a new sibling export named `<attempt_id>.revision-<N>` with `supersedes` provenance; it never overwrites the original attempt directory.
+- An export is immutable after publication. Late files are recorded for operator review. An explicit re-finalize operation writes a new sibling export named `<attempt_id>.revision-<N>` with `supersedes` provenance; it never overwrites the original attempt directory.
 
-The sampling hot path should not flush a long-lived CSV to NFS after every sample. Implement rotating chunks by time or size:
+The sampling hot path never writes to NFS. Each collector appends to one node-local file, `samples/<collector>.csv`, flushed after every sample and published once after the job:
 
-- default chunk duration: site-configured, initially 30 seconds
-- default maximum chunk size: site-configured
+- A sample file holds raw readings only. The first column, `t`, is the sample time in epoch seconds with millisecond resolution, taken from the monotonic clock anchored once to the wall clock. RAPL and NVML files then have one column per domain, named by its path in the collector manifest (`intel-rapl:0`, a GPU UUID), holding the raw counter in its native unit (RAPL microjoules, NVML millijoules; the manifest records `counter_unit`). `nvidia_smi` and `rocm_smi` files have one row per GPU and sample.
+- Names, groups, counter ranges, and units live once in `<collector>_manifest.json`, not in every row. Deltas, wraps, power, and joules are derived at finalization, so a correction to that arithmetic can be rerun on the published raw data.
+- Size: about 65 bytes per sample for the four Zen4 RAPL domains, or about 0.25 MB per node-hour at 1 s. The one-node test job 179041 produced a 7.7 KB RAPL file for 122 s, where the earlier 13-column rows in 30-second chunks took 73 KB in five files.
+- Time-based rotation is not used. Its benefit would be copying closed pieces during the job, but a node failure also ends the job, and the stager copies once after Epilog.
 - production node-local spool: `/var/spool/repacss-power/<attempt_id>/<hostname>/`
-- authoritative data: closed, checksum-verified chunks in shared staging
+- authoritative data: sealed, checksum-verified sample files in shared staging
 
 The production default enables local spool because NFS-outage and reboot recovery depend on durable node-local metadata. A site may disable it and write directly in the shared node directory using NFS-side `.partial` files, but that reduced mode must explicitly waive offline collection and reboot-recovery acceptance tests.
 
 Implementation:
 
-- Extend `inband/storage.py` with safe path builders, atomic JSON, chunk publication, checksums, and permissions.
-- Add `inband/chunks.py` for rotation and publication.
+- Extend `inband/storage.py` with safe path builders, atomic JSON, checksums, and permissions.
+- Add `inband/spool.py` for sample files, the sealed inventory, and atomic publication.
 - Add `inband/stager.py` for retryable local-to-shared publication and `.done`-last semantics.
-- Modify `inband/collectors/base.py` to stream rows into chunks instead of reading a long CSV at shutdown.
-- Add `shared/slurm/repacss-power-stage@.service` so closed local chunks can finish staging after the allocation is released.
+- Modify `inband/collectors/base.py` to append raw readings to one sample file per collector.
+- Add `shared/slurm/repacss-power-stage@.service` so sealed local files can finish staging after the allocation is released.
 - Retain a read-only resolver for the current flat layout for one transition release; do not dual-write old and new layouts.
-- Extend `tests/unit/inband/test_storage.py` and add `tests/unit/inband/test_chunks.py`.
+- Extend `tests/unit/inband/test_storage.py` and add `tests/unit/inband/test_spool.py`.
 
 Acceptance:
 
 - A reader never observes a half-written final file.
 - An interrupted publication leaves only an ignorable `.partial`.
-- A transient shared-filesystem outage does not corrupt already closed local chunks.
+- A transient shared-filesystem outage does not corrupt the local spool.
 - User-controlled strings cannot escape configured roots.
 
-**Implementation status:** [chunks.py](chunks.py), [stager.py](stager.py), and the [stager unit](../shared/slurm/repacss-power-stage@.service) implement this section with the current `<staging_root>/<storage_key>/<hostname>/` layout. The v2 layout arrives with the attempt identity work in section 2. Prolog writes `attempt.json` to `<local_spool_root>/<storage_key>/<hostname>/` and starts the runner. The runner writes 30-second chunks there (`REPACSS_POWER_IB_CHUNK_SECONDS`), takes a final sample after SIGTERM, and writes `node_sealed.json` on every exit path. Epilog sends non-blocking requests to stop the runner and start the stager, and writes nothing to shared storage.
+**Implementation status:** [spool.py](spool.py), [stager.py](stager.py), and the [stager unit](../shared/slurm/repacss-power-stage@.service) implement this section with the current `<staging_root>/<storage_key>/<hostname>/` layout. The v2 layout arrives with the attempt identity work in section 2. Prolog writes `attempt.json` to `<local_spool_root>/<storage_key>/<hostname>/` and starts the runner. The runner appends to one sample file per collector there, takes a final sample after SIGTERM, and writes `node_sealed.json` on every exit path. Epilog sends non-blocking requests to stop the runner and start the stager, and writes nothing to shared storage.
 
-The stager waits for the seal, publishes the sealed inventory, `node_status.json`, and `.done`, and deletes only the published local files. A failed publication exits non-zero with the local spool intact, and the unit's `Restart=on-failure` retries it. If the runner unit stops without a seal, the stager closes the remaining chunks at their last complete line and publishes a `forced_partial` seal.
+The stager waits for the seal, publishes the sealed inventory, `node_status.json`, and `.done`, and deletes only the published local files. A failed publication exits non-zero with the local spool intact, and the unit's `Restart=on-failure` retries it. If the runner unit stops without a seal, the stager closes the open sample files at their last complete line and publishes a `forced_partial` seal.
 
-The inspected Zen4 node (`rpc-92-1`) mounts `/` as an in-memory `rootfs`, so the local spool survives an NFS outage but not a reboot. A reboot also ends the job, so v1 does not copy chunks during the job. Before enabling the stager on NFS, create the staging root and verify that root, or the stager's service identity, can write to it under the export's squash policy.
+The inspected Zen4 node (`rpc-92-1`) mounts `/` as an in-memory `rootfs`, so the local spool survives an NFS outage but not a reboot. A reboot also ends the job, so v1 does not copy samples during the job. Before enabling the stager on NFS, create the staging root and verify that root, or the stager's service identity, can write to it under the export's squash policy.
 
 ### 4. Scope collection to the allocation
 
@@ -482,7 +483,7 @@ Runner:
 - If no requested collector can start, write `failed`, still notify readiness so the fail-open Prolog can return, and let the job proceed without telemetry.
 - Run all healthy collectors concurrently.
 - Install a SIGTERM handler.
-- Stop sampling, close the current chunk, atomically write `node_sealed.json`, publish final local status, request stage-out, and exit within `TimeoutStopSec`.
+- Stop sampling, close the sample files, atomically write `node_sealed.json`, publish final local status, request stage-out, and exit within `TimeoutStopSec`.
 - Leave enough local/shared status for Epilog to classify a forced termination.
 
 Epilog:
@@ -497,15 +498,15 @@ Epilog:
 Stager:
 
 - Run as a system service outside the user's allocation cgroup.
-- Copy only closed chunks from the validated attempt spool.
+- Copy only the sealed files from the validated attempt spool.
 - Retry transient shared-filesystem errors with bounded backoff.
-- Publish `node_status.json` and `.done` only after a producer seal exists and every sealed chunk passes checksum verification.
-- Retain un-staged chunks at the configured high-water/retention boundary and alert instead of deleting them silently.
+- Publish `node_status.json` and `.done` only after a producer seal exists and every sealed file passes checksum verification.
+- Retain un-staged files at the configured high-water/retention boundary and alert instead of deleting them silently.
 
 Reconciliation:
 
 - Run from a separate timer, never in Prolog/Epilog.
-- Recover closed local chunks after reboot and restart interrupted stage-out.
+- Recover sealed local files after reboot and restart interrupted stage-out.
 - Treat a runner as orphaned only after a grace period and a positive check that the matching allocation is no longer active; never kill a runner based only on file age.
 - Because reconciliation is outside the scheduling-critical hook, it may use a bounded, read-only site-approved Slurm query when no reliable local cgroup/state check exists.
 - Preserve all un-staged data when stopping an orphan.
@@ -592,7 +593,7 @@ A persistent `repacss-power-finalizer.service` coordinates a bounded worker pool
 3. Check shared staging once; do not sleep or poll while holding a worker slot.
 4. If nodes are still pending and `deadline_at` has not passed, set `next_check_at`, release the lease, and return the record to `pending`.
 5. If every node is sealed and done, or the absolute deadline has passed, dispatch an attempt-scoped aggregation worker subject to configured concurrency and backpressure limits.
-6. The worker acquires an attempt lock, validates every `.done`, status, sealed inventory, chunk size, and checksum, and classifies missing or invalid inputs.
+6. The worker acquires an attempt lock, validates every `.done`, status, sealed inventory, file size, and checksum, and classifies missing or invalid inputs.
 7. Normalize valid rows into long-form `raw_power.csv`.
 8. Build `summary.json`, `provenance.json`, and finalization status.
 9. Write the export under an administrator-controlled sibling publishing directory on the same filesystem, flush it, apply final numeric UID/GID and modes, then atomically rename it to the final attempt path.
@@ -601,14 +602,14 @@ A persistent `repacss-power-finalizer.service` coordinates a bounded worker pool
 
 **Implementation status:** a functional subset is implemented without leases, a worker pool, or a dead-letter retry policy. For `inband` and `both`, [dispatcher.py](../shared/slurm/dispatcher.py) writes `pending/<attempt_id>.json` under `REPACSS_POWER_IB_QUEUE_ROOT` (default `/var/spool/repacss-power/finalize-queue`) with the expected nodes, job window, and a deadline 600 seconds after enqueue (`REPACSS_POWER_IB_FINALIZE_TIMEOUT_SECONDS`). The attempt ID is the storage key that compute Prolog derives from the same Slurm variables. [finalizer.py](../shared/slurm/finalizer.py), run by the [finalizer unit](../shared/slurm/repacss-power-finalizer.service) or by hand with `python -m shared.slurm.finalizer run --once`, exports an attempt once every expected node has `.done` or the deadline has passed. It moves the record to `complete/`, or to `failed/` after an unexpected error.
 
-[aggregation.py](aggregation.py) verifies each node's RAPL and NVML chunks against `node_status.json` and sums the wrap-corrected deltas per domain, prorating the samples that cross the job start or end. Node and job totals cover `cpu_package`, `host_dram`, and `gpu` separately, and a job total is `null` unless every expected node supplies it. The export goes to `<report_root>/<user>/<job_id>/<attempt_id>/power_profile/` (`REPACSS_POWER_REPORT_ROOT`, falling back to `MONSTER_POWER_BASE`, default `/var/lib/repacss-power/reports`). It contains `raw_power.csv` with the normalized columns below, `summary.json`, and `provenance.json`. `nvidia_smi` and `rocm_smi` chunks are published but not aggregated. A hybrid job gets the OOB report and the IB export side by side rather than one combined report.
+[aggregation.py](aggregation.py) verifies each node's RAPL and NVML sample files against `node_status.json`, differences consecutive raw readings per domain with RAPL wrap correction, and sums the interval energies, prorating the intervals that cross the job start or end. Average power is the energy divided by the seconds the intervals cover, so the gap before a node's first sample does not lower it; the summary reports that coverage per node. Node and job totals cover `cpu_package`, `host_dram`, and `gpu` separately, and a job total is `null` unless every expected node supplies it. The export goes to `<report_root>/<user>/<job_id>/ib/` (`REPACSS_POWER_REPORT_ROOT`, falling back to `MONSTER_POWER_BASE`, default `/var/lib/repacss-power/reports`). It contains `raw_power.csv` with one row per sample interval and domain (`timestamp,hostname,metric,group,energy_j,power_w`), `summary.json`, and `provenance.json`. `metric` names the domain uniquely on its node, such as `package-0`, `package-1/dram`, `psys`, or `gpu2`. `nvidia_smi` and `rocm_smi` samples are published but not aggregated. A hybrid job gets the OOB report and the IB export side by side rather than one combined report.
 
-**NVIDIA GPU energy:** the `nvml` collector ([collectors/nvml.py](collectors/nvml.py)) reads each GPU's `nvmlDeviceGetTotalEnergyConsumption` counter (millijoules since driver load, Volta and newer) through ctypes and the driver's `libnvidia-ml.so.1`, so no Python NVML package is needed. Its rows use the RAPL columns, with the GPU UUID as the domain path and `gpu` as the group, so one aggregation path covers CPU and GPU energy. A smaller reading means a driver reload and makes that GPU's energy `null`. On `rpg-93-7` (4x H100 NVL, driver 610.43.02), power derived from the counter over 2 seconds was within 1-2% of `nvidia-smi` `power.draw`. The collector samples every GPU on the node, which is the job's allocation only under the exclusive-node assumption. When a request names no collectors, the default is `rapl`, `nvml`, and `rocm_smi`; `nvidia_smi` runs only on request and records telemetry such as temperature and clocks. A default collector that the node lacks does not make the node partial.
+**NVIDIA GPU energy:** the `nvml` collector ([collectors/nvml.py](collectors/nvml.py)) reads each GPU's `nvmlDeviceGetTotalEnergyConsumption` counter (millijoules since driver load, Volta and newer) through ctypes and the driver's `libnvidia-ml.so.1`, so no Python NVML package is needed. Its sample file has one column per GPU, named by the GPU UUID, and the manifest gives each GPU the group `gpu`, so one aggregation path covers CPU and GPU energy. A smaller reading means a driver reload and makes that GPU's energy `null`. On `rpg-93-7` (4x H100 NVL, driver 610.43.02), power derived from the counter over 2 seconds was within 1-2% of `nvidia-smi` `power.draw`. The collector samples every GPU on the node, which is the job's allocation only under the exclusive-node assumption. When a request names no collectors, the default is `rapl`, `nvml`, and `rocm_smi`; `nvidia_smi` runs only on request and records telemetry such as temperature and clocks. A default collector that the node lacks does not make the node partial.
 
 Completion states:
 
 - `complete`: every expected node published valid final status.
-- `partial`: at least one valid sample exists, but a node, collector, or chunk is missing or invalid.
+- `partial`: at least one valid sample exists, but a node, collector, or sample file is missing or invalid.
 - `failed`: no valid samples can be exported.
 
 A missing node Epilog after cancellation or node failure is expected and becomes `partial` after timeout; it must never block forever or cause head-of-line blocking. Retrying finalization must not create duplicate output or change an already published attempt silently.
@@ -625,35 +626,25 @@ Implementation:
 - Update `cli/export.py` to consume the same normalized export implementation.
 - Add `shared/export/power_export.py`.
 
-For `power:both`, preserve the current OOB backend as a separate source. Cross-source orchestration belongs to `shared/slurm/finalizer.py`; `inband/aggregation.py` must never import or query an OOB backend. Refactor `oob/slurm/epilog_handler.py` to return a normalized, side-effect-free source result that the shared worker can export, instead of directly owning the legacy output directory. The shared worker assembles OOB and IB only at final export time. IB timeout or partial failure must not discard a valid OOB result, and OOB failure must not discard valid IB chunks.
+For `power:both`, preserve the current OOB backend as a separate source. Cross-source orchestration belongs to `shared/slurm/finalizer.py`; `inband/aggregation.py` must never import or query an OOB backend. Refactor `oob/slurm/epilog_handler.py` to return a normalized, side-effect-free source result that the shared worker can export, instead of directly owning the legacy output directory. The shared worker assembles OOB and IB only at final export time. IB timeout or partial failure must not discard a valid OOB result, and OOB failure must not discard valid IB samples.
 
-Required normalized `raw_power.csv` columns:
+IB `raw_power.csv` columns, one row per sample interval and domain:
 
 ```text
-timestamp
-elapsed_ms
-sequence
-job_id
-attempt_id
-node
-scope_type
-scope_id
-metric_name
-value
-unit
-source_id
-source_kind
-collector_family
-timestamp_mode
-retrieval_mode
+timestamp   end of the interval, ISO 8601 UTC with milliseconds
+hostname    node that took the sample
+metric      domain name unique on its node: package-0, package-1/dram, psys, gpu0
+group       cpu_package, host_dram, core, platform, or gpu
+energy_j    energy in the part of the interval inside the job window
+power_w     average power over the interval
 ```
 
 Required semantics:
 
-- IB rows use `source_kind=in_band` and `retrieval_mode=job_local_artifact`; hybrid exports preserve their independent OOB values.
-- `source_id` is stable for a collector/node/scope combination.
+- Rows are derived from the raw counter readings in staging; nothing in the export is sampled separately.
+- `energy_j` summed over a `metric` equals that domain's energy in `summary.json`.
 - `summary.json` contains contract-required time range, node scope, source kinds, power summary, energy values, availability flags, aggregation method, and confidence notes.
-- `provenance.json` records request, software/schema versions, expected/received/missing nodes, allocation scope, sampling interval, collector/device mapping, chunk checksums, partial failures, and export method.
+- `provenance.json` records request, software/schema versions, expected/received/missing nodes, allocation scope, sampling interval, collector/device mapping, sample file checksums, partial failures, and export method.
 - Sampled power is integrated with an explicitly named numerical method.
 - RAPL counters handle wraparound.
 - Overlapping sources are not blindly summed into one `energy_total`. When no non-overlapping aggregation policy is valid, report source-specific energy and set the combined total to `null` with a confidence note.
@@ -665,15 +656,13 @@ Add typed configuration for:
 | Setting | Purpose |
 |---|---|
 | `REPACSS_POWER_IB_STAGING_ROOT` | administrator-owned shared staging |
-| `REPACSS_POWER_IB_LOCAL_SPOOL_ROOT` | durable node-local chunk spool; required for outage/reboot recovery |
+| `REPACSS_POWER_IB_LOCAL_SPOOL_ROOT` | durable node-local sample spool; required for outage/reboot recovery |
 | `REPACSS_POWER_IB_QUEUE_ROOT` | finalizer queue |
 | `REPACSS_POWER_REPORT_ROOT` | user-facing exports |
 | `REPACSS_POWER_IB_ALLOWED_COLLECTORS` | submission/runtime allowlist |
 | `REPACSS_POWER_IB_DEFAULT_INTERVAL_MS` | default sampling cadence |
 | `REPACSS_POWER_IB_MIN_INTERVAL_MS` | lower interval bound |
 | `REPACSS_POWER_IB_MAX_INTERVAL_MS` | upper interval bound |
-| `REPACSS_POWER_IB_CHUNK_SECONDS` | chunk rotation |
-| `REPACSS_POWER_IB_CHUNK_MAX_BYTES` | size rotation |
 | `REPACSS_POWER_IB_FINALIZE_TIMEOUT_SECONDS` | missing-node deadline |
 | `REPACSS_POWER_IB_FINALIZE_MAX_WORKERS` | bounded aggregation concurrency |
 | `REPACSS_POWER_IB_QUEUE_LEASE_SECONDS` | crash-recoverable queue claim |
@@ -689,7 +678,7 @@ New code uses the `REPACSS_POWER_*` namespace. Existing `MONSTER_POWER_*` settin
 | File | Planned change |
 |---|---|
 | `pyproject.toml` | installable wheel/editable package for `inband`, `shared`, `oob`, and `cli` |
-| `shared/config/config.py` | typed roots, policy bounds, chunking, timeout, retention |
+| `shared/config/config.py` | typed roots, policy bounds, timeout, retention |
 | `shared/models/__init__.py` | versioned request, attempt, node-status, and finalization models |
 | `shared/slurm/comments.py` | strict grammar, canonical request, allowlist and bounds |
 | `shared/slurm/job_submit_repacss_power.lua` | submission/modify validation helper for the site plugin |
@@ -705,18 +694,18 @@ New code uses the `REPACSS_POWER_*` namespace. Existing `MONSTER_POWER_*` settin
 | `shared/slurm/repacss-power-stage@.service` | retryable node-to-shared stage-out after job end |
 | `shared/slurm/repacss-power-finalizer.service` | persistent non-blocking headnode coordinator |
 | `shared/slurm/repacss-power-finalize@.service` | bounded attempt worker template |
-| `shared/slurm/repacss-power-reaper.service` and `.timer` | recover orphan runners and un-staged chunks outside Slurm hooks |
+| `shared/slurm/repacss-power-reaper.service` and `.timer` | recover orphan runners and un-staged sample files outside Slurm hooks |
 | site compute-node Prolog (not in this repository) | compose the REPACSS helper with existing site logic without replacement |
 | `src/services/slurm.epilogslurmctld` | remove legacy sleep/output creation; retain only a warned compatibility handoff or retire it |
 | `inband/profiles.py` | audited RAPL profile loading, partition/node selection, startup validation, manifest (implemented) |
 | `inband/identity.py` | attempt and safe-token rules |
 | `inband/allocation.py` | GPU/exclusive allocation normalization |
-| `inband/chunks.py` | rotation, atomic publication, checksums |
+| `inband/spool.py` | sample files, sealed inventory, atomic publication, checksums |
 | `inband/stager.py` | local backlog, retry, shared publication, `.done` marker |
 | `inband/storage.py` | v2 paths, permissions, atomic JSON, compatibility reader |
 | `inband/hooks.py` | trusted request, attempt state, idempotent lifecycle |
 | `inband/runner.py` | readiness, concurrent collectors, bounded shutdown |
-| `inband/collectors/*.py` | chunk streaming, device filtering, scope metadata |
+| `inband/collectors/*.py` | raw-reading streaming, device filtering, scope metadata |
 | `inband/aggregation.py` | wait deadline, validation, normalization, summary |
 | `inband/reaper.py` | bounded reconciliation after missed Epilog or node reboot |
 | `oob/slurm/epilog_handler.py` | return a normalized side-effect-free OOB source result for shared orchestration |
@@ -734,7 +723,7 @@ New code uses the `REPACSS_POWER_*` namespace. Existing `MONSTER_POWER_*` settin
 
 - Freeze request, attempt, staging, row, status, and export schemas.
 - Complete the target Slurm/Extra/environment compatibility probe.
-- Decide interval bounds, RAPL policy, roots, service identity, chunking, retention, and timeout.
+- Decide interval bounds, RAPL policy, roots, service identity, retention, and timeout.
 - Add installable package metadata and prove imports from outside the checkout.
 
 Exit: one reviewed schema version, no unresolved production handoff, and no runtime behavior change.
@@ -750,7 +739,7 @@ Exit: a valid comment reaches every canary node unchanged; invalid requests are 
 
 #### M2: attempt-safe storage and allocation scope
 
-- Implement v2 attempt paths, atomic state, chunks, and checksums.
+- Implement v2 attempt paths, atomic state, sample files, and checksums.
 - Enforce GPU allocation filtering and RAPL policy.
 - Preserve a read-only v1 compatibility resolver.
 
@@ -758,7 +747,7 @@ Exit: requeues/arrays are isolated, no unallocated GPU is observed, and interrup
 
 #### M3: bounded compute lifecycle
 
-- Implement `Type=notify` readiness, fail-open wrappers, non-blocking Epilog stop, durable producer seal, node stager retry, final chunk publication, and `.done`-last behavior.
+- Implement `Type=notify` readiness, fail-open wrappers, non-blocking Epilog stop, durable producer seal, node stager retry, final sample publication, and `.done`-last behavior.
 - Harden and validate the systemd unit.
 - Validate `PrologFlags=Alloc` and, if selected, `DeferBatch`.
 
@@ -796,7 +785,7 @@ M0 -> M1 -> M2 -> M3 -> M4 -> M5
 | Invalid mode/key/collector/interval/control character | submission or modification rejected clearly |
 | Extra owned by `extra_constraints` or another site policy | REPACSS leaves Extra unchanged and uses the canonical validated Comment branch |
 | `backend=api` before API implementation | submission rejected as unsupported |
-| One-node exclusive CPU job | valid RAPL chunks, statuses, checksums, summary, and provenance |
+| One-node exclusive CPU job | valid RAPL sample file, statuses, checksums, summary, and provenance |
 | One allocated NVIDIA or AMD GPU | only that device appears |
 | Shared-node RAPL with default policy | RAPL skipped and reason recorded |
 | Multi-node job | every expected node is complete or explicitly missing/partial |
@@ -807,16 +796,16 @@ M0 -> M1 -> M2 -> M3 -> M4 -> M5
 | Job array | isolated state and output for every element |
 | Collector unavailable | healthy collectors continue; telemetry becomes partial |
 | Runner crash or SIGKILL | failure recorded; job continues |
-| Runner/stager race during final chunk | `.done` is impossible before a valid producer seal and full sealed inventory |
+| Runner/stager race during the final sample | `.done` is impossible before a valid producer seal and full sealed inventory |
 | Worst-case runner stop | Epilog returns inside its audited budget and the node is not drained |
-| Shared filesystem unavailable | local closed chunks retained; hook returns `0`; stage-out retries |
+| Shared filesystem unavailable | sealed local files retained; hook returns `0`; stage-out retries |
 | Local spool full | controlled degradation and alert; no arbitrary deletion or node drain |
 | Node failure with no Epilog | finalizer times out to partial and lists missing node |
-| Missed Epilog or node reboot | reconciliation stops orphan runners and stages closed chunks without deleting evidence |
-| Checksum mismatch | affected chunk quarantined and export marked partial |
+| Missed Epilog or node reboot | reconciliation stops orphan runners and stages local files without deleting evidence |
+| Checksum mismatch | affected file quarantined and export marked partial |
 | Repeated finalizer execution | no duplicate output; same result or explicit immutable conflict |
 | Finalizer crash after queue claim | expired lease is recovered and the original absolute deadline is preserved |
-| Late chunk plus operator re-finalize | original export remains unchanged and a revisioned sibling is produced |
+| Late file plus operator re-finalize | original export remains unchanged and a revisioned sibling is produced |
 | OOB database unavailable for pure IB | IB export still succeeds |
 | `power:both` with one source failing | valid source preserved; failure present in provenance |
 | 100+ short concurrent jobs, including a missing-node attempt | bounded fairness/backpressure; no head-of-line blocking |
@@ -861,7 +850,7 @@ Initial performance targets, to be confirmed during canary:
 - compute Prolog and Epilog p99 remain below the site-agreed hook budget
 - finalizer enqueue p99 remains below 500 ms
 - runner CPU overhead remains below 1% of one core at the default interval
-- NFS write frequency is bounded by chunk rotation rather than sample cadence
+- NFS is written once per node after the job, never at sample cadence
 
 ### 11. Deployment and canary rollout
 

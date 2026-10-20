@@ -3,17 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from inband.collectors import rapl
 from inband.collectors.rapl import RAPLCollector, counter_delta_uj, wrap_safe_seconds
-
-
-def _fixed_clock(monkeypatch, readings):
-    clock = iter(readings)
-    monkeypatch.setattr(rapl, "time", SimpleNamespace(monotonic=lambda: next(clock)))
 
 
 def test_counter_delta_without_and_with_a_wrap():
@@ -34,41 +27,33 @@ def test_probe_reports_the_skip_reason_for_an_unverified_node(tmp_path: Path):
     assert collector.manifest_payload()["reason"] == "unverified_node"
 
 
-def test_rows_are_keyed_by_domain_path(fake_powercap, monkeypatch):
+def test_columns_and_readings_are_keyed_by_domain_path(fake_powercap):
     root = fake_powercap("h100_host_rapl")
     collector = RAPLCollector(partition="h100", node="rpg-93-1", sysfs_root=root)
     assert collector.probe().available
-    _fixed_clock(monkeypatch, [10.0] * 5 + [11.0] * 5)
+    # Both DRAM domains are named "dram"; their paths keep them apart.
+    assert collector.csv_columns() == [
+        "intel-rapl:0",
+        "intel-rapl:0/intel-rapl:0:0",
+        "intel-rapl:1",
+        "intel-rapl:2",
+        "intel-rapl:2/intel-rapl:2:0",
+    ]
 
     runtime = collector.prepare_runtime()
-    first = collector.collect_rows(runtime, 0.0)
-    assert len(first) == 5
-    assert all(row["delta_uj"] is None for row in first)
-
-    # Both DRAM domains are named "dram"; their deltas must stay separate.
-    (root / "intel-rapl:0/intel-rapl:0:0/energy_uj").write_text("3000000\n", encoding="utf-8")
     (root / "intel-rapl:2/intel-rapl:2:0/energy_uj").write_text("1500000\n", encoding="utf-8")
-    (root / "intel-rapl:0/energy_uj").write_text("500\n", encoding="utf-8")
-    second = {row["domain_path"]: row for row in collector.collect_rows(runtime, 1.0)}
+    (readings,) = collector.collect_rows(runtime)
 
-    assert second["intel-rapl:0/intel-rapl:0:0"]["delta_uj"] == 2_000_000
-    assert second["intel-rapl:0/intel-rapl:0:0"]["power_watts"] == 2.0
-    assert second["intel-rapl:2/intel-rapl:2:0"]["delta_uj"] == 500_000
-    assert second["intel-rapl:0"]["wrapped"] is True
-    assert second["intel-rapl:0"]["delta_uj"] == 262_143_328_850 - 1_000_000 + 500
-    assert second["intel-rapl:1"]["domain_name"] == "psys"
-    assert second["intel-rapl:1"]["domain_group"] == "platform"
-    assert not any(row["wrap_ambiguous"] for row in second.values())
+    assert readings["intel-rapl:2/intel-rapl:2:0"] == 1_500_000
+    assert readings["intel-rapl:0"] == 1_000_000
 
 
-def test_a_gap_beyond_the_wrap_bound_is_flagged(fake_powercap, monkeypatch):
+def test_an_unreadable_counter_is_left_out_of_the_sample(fake_powercap):
     root = fake_powercap("zen4_rapl")
     collector = RAPLCollector(partition="zen4", node="rpc-91-1", sysfs_root=root)
-    _fixed_clock(monkeypatch, [0.0] * 4 + [70.0] * 4)
-
     runtime = collector.prepare_runtime()
-    collector.collect_rows(runtime, 0.0)
-    rows = collector.collect_rows(runtime, 70.0)
+    (root / "intel-rapl:1/energy_uj").write_text("not a number\n", encoding="utf-8")
 
-    assert len(rows) == 4
-    assert all(row["wrap_ambiguous"] for row in rows)
+    (readings,) = collector.collect_rows(runtime)
+
+    assert sorted(readings) == ["intel-rapl:0", "intel-rapl:0/intel-rapl:0:0", "intel-rapl:1/intel-rapl:1:0"]

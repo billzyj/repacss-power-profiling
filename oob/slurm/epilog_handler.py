@@ -14,6 +14,7 @@ import pandas as pd
 
 from shared.analysis.energy import compute_energy_kwh_for_hostname
 from shared.models import SlurmJobContext
+from shared.slurm.delivery import enqueue_oob_delivery
 from shared.slurm.resolver import expand_nodelist, resolve_job_context_from_env
 from shared.utils.conversions import convert_power_series_to_watts
 from oob.backends.monster_db.backend import MonsterDBBackend
@@ -451,7 +452,7 @@ def handle_oob_job(context: SlurmJobContext, out_dir: Optional[Path] = None) -> 
     """Run the OOB job export for a Slurm job context."""
     if out_dir is None:
         power_base = Path(os.environ.get("MONSTER_POWER_BASE", "/var/lib/repacss-power/reports"))
-        out_dir = power_base / context.user / context.job_id
+        out_dir = power_base / context.user / context.job_id / "oob"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     csv_path = out_dir / "raw_power.csv"
@@ -524,7 +525,9 @@ def main() -> None:
         out_dir = os.environ.get("MONSTER_POWER_OUTDIR")
         if not out_dir:
             raise SystemExit("MONSTER_POWER_OUTDIR is required in epilog mode")
-    handle_oob_job(context, Path(out_dir))
+    written = handle_oob_job(context, Path(out_dir))
+    if cli_result is None:
+        enqueue_oob_delivery(context.cluster_name, context.job_id, context.user, written, os.environ)
 
 
 if __name__ == "__main__":

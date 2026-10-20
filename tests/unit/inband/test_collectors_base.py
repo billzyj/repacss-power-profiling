@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from inband.collectors.base import CollectorProbe, PollingCSVCollector
+from inband.spool import sample_path
 
 
 class DummyCollector(PollingCSVCollector):
@@ -16,37 +17,30 @@ class DummyCollector(PollingCSVCollector):
         return CollectorProbe(name=self.name, available=True, details={"kind": "test"})
 
     def csv_columns(self):
-        return ["timestamp", "elapsed_seconds", "hostname", "value"]
+        return ["value"]
 
     def prepare_runtime(self):
         return {"counter": 0}
 
-    def collect_rows(self, runtime, elapsed_seconds):
+    def collect_rows(self, runtime):
         runtime["counter"] += 1
-        return [
-            {
-                "timestamp": f"2026-01-01T00:00:{runtime['counter']:02d}+00:00",
-                "elapsed_seconds": round(elapsed_seconds, 6),
-                "hostname": self.hostname(),
-                "value": runtime["counter"],
-            }
-        ]
+        return [{"value": runtime["counter"]}]
 
 
-def _rows(path: Path):
-    with path.open(newline="", encoding="utf-8") as handle:
-        return list(csv.DictReader(handle))
-
-
-def test_collector_writes_rotating_chunks_and_samples_once_more_on_stop(tmp_path: Path):
+def test_collector_writes_one_file_and_samples_once_more_on_stop(tmp_path: Path):
     collector = DummyCollector()
-    handle = collector.start(interval_ms=10, output_dir=tmp_path, chunk_seconds=0.03)
+    path = sample_path(tmp_path, collector.name)
+    before = time.time()
+    handle = collector.start(interval_ms=10, output_path=path)
     time.sleep(0.12)
     result = collector.stop(handle)
 
     assert result.status == "complete"
-    assert len(result.chunks) >= 2
-    assert sorted(tmp_path.iterdir()) == sorted(result.chunks)  # no .partial left behind
-    values = [int(row["value"]) for chunk in result.chunks for row in _rows(chunk)]
-    # Every sample, including the one taken after the stop request, is in exactly one chunk.
-    assert values == list(range(1, result.sample_count + 1))
+    assert result.output_path == path
+    assert [entry.name for entry in path.parent.iterdir()] == ["dummy.csv"]  # no .partial left behind
+    with path.open(newline="", encoding="utf-8") as handle_:
+        rows = list(csv.DictReader(handle_))
+    # Every sample, including the one taken after the stop request, is in the file once.
+    assert [int(row["value"]) for row in rows] == list(range(1, result.sample_count + 1))
+    times = [float(row["t"]) for row in rows]
+    assert before - 1 < times[0] and times == sorted(times)
