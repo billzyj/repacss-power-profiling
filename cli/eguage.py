@@ -26,7 +26,7 @@ def _write_json(payload: dict, output: Optional[Path]) -> None:
 
 @click.group(name="eguage")
 def eguage_group():
-    """eGauge API workflows."""
+    """Legacy eGauge API workflows (unsupported; kept for reference)."""
 
 
 @eguage_group.command("probe")

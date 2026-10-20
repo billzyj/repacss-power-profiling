@@ -13,7 +13,7 @@ The long-term source layout is organized around three primary implementation dom
 
 - `shared/`: cross-domain contracts, config, Slurm helpers, common analysis/export foundations
 - `oob/`: OOB query semantics, backend adapters, and headnode job-end workflows
-- `eguage/`: direct-or-tunneled eGauge Web API connector for facility-level telemetry
+- `eguage/`: legacy eGauge Web API connector (unsupported; kept from its last working version)
 - `inband/`: IB collectors, runtime lifecycle, staging, and aggregation
 - `cli/`: user-facing program entrypoints, primarily for OOB query/export workflows
 - `tests/`: unit, integration, and end-to-end validation
@@ -52,7 +52,7 @@ Planned steady-state structure:
 repacss-power-profiling/
 ├── shared/      # cross-domain foundations
 ├── oob/         # out-of-band query and export logic
-├── eguage/      # eGauge Web API connector
+├── eguage/      # legacy eGauge connector (unsupported)
 ├── inband/      # in-band collectors and Slurm-bound runtime flow
 ├── cli/         # user-facing command entrypoints
 ├── tests/
@@ -70,7 +70,7 @@ repacss-power-profiling/
 ## Features
 
 - **Secure SSH tunnel connection** to TimescaleDB using `sshtunnel`
-- **Direct-or-SSH access** to private eGauge Web API endpoints, with automatic REPACSS-internal reachability probing
+- **Legacy eGauge connector** (unsupported): direct-or-SSH access to private eGauge Web API endpoints, kept from its last working version
 - **Multi-database support** for different cluster databases
 - Query power consumption, temperature, and utilization metrics from various schemas
 - Support for time-range queries and aggregations
@@ -132,7 +132,7 @@ REPACSS_SSH_HOSTNAME=narumuu.ttu.edu
 REPACSS_SSH_USERNAME=your_ssh_username
 REPACSS_SSH_KEY_PATH=/path/to/your/private/key
 
-# eGauge API Settings (replace with your actual values)
+# Legacy eGauge API settings, used only by the unsupported eGauge connector
 REPACSS_EGAUGE_HOST=192.168.4.81
 REPACSS_EGAUGE_USERNAME=your_eguage_username
 REPACSS_EGAUGE_PASSWORD=your_eguage_password
@@ -160,7 +160,7 @@ python3 -m cli config show
 # Validate configuration
 python3 -m cli config test
 
-# Verify the eGauge connector
+# Verify the legacy eGauge connector (unsupported)
 python3 -m cli eguage probe
 
 # Backward-compatible legacy entrypoint still works during migration
@@ -194,6 +194,7 @@ python3 -m cli oob job --job-id 96597 --user kalebuch --nodelist rpg-93-6 --star
 # Generic export surface (currently OOB-backed in P0-P2)
 python3 -m cli export --job 96597 --user kalebuch --nodelist rpg-93-6 --start "2026-04-13 00:00:00" --end "2026-04-13 01:00:00" --output output/export-96597
 
+# Legacy eGauge connector (unsupported; kept for reference)
 # Probe the eGauge tunnel and API auth path
 python3 -m cli eguage probe
 
@@ -256,8 +257,8 @@ Current CLI scope in P3:
 
 - `config show`
 - `config test`
-- `eguage probe`
-- `eguage registers`
+- `eguage probe` (legacy, unsupported)
+- `eguage registers` (legacy, unsupported)
 - `ib probe`
 - `ib sample`
 - `ib status`

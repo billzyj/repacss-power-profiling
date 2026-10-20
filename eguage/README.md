@@ -1,4 +1,6 @@
-# eGauge Connector
+# eGauge Connector (Legacy)
+
+> **Legacy, unsupported.** This connector is kept as the last version that worked against the REPACSS eGauge meter. It is no longer maintained, and no current REPACSS workflow depends on it.
 
 This directory contains the initial eGauge Web API connector for REPACSS.
 
