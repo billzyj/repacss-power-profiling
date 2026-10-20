@@ -5,7 +5,8 @@ After=network-online.target remote-fs.target
 [Service]
 Type=simple
 # Run as the controller's SlurmUser, the identity that EpilogSlurmctld uses to write
-# the queue and that already writes OOB reports under /mnt/SHARED-AREA/power_reports.
+# the queue and the OOB reports. Site paths belong in the EnvironmentFile:
+# REPACSS_POWER_IB_QUEUE_ROOT, MONSTER_POWER_IB_STORE_ROOT, REPACSS_POWER_REPORT_ROOT.
 User=slurm
 WorkingDirectory=/opt/repacss-power-profiling
 EnvironmentFile=-/etc/repacss-power/finalizer.env

@@ -26,7 +26,7 @@ sbatch -p zen4 --exclusive --comment='power:inband' job.sh
 sbatch -p h100 --exclusive --comment='power:both' job.sh
 ```
 
-The short IB forms use the default collectors (`rapl`, `nvml`, `rocm_smi`, each skipped where absent). GPU requests must also match the application's needs and site GRES policy. `power:inband` and `power:both` require `--exclusive`: compute Prolog collects only when `SLURM_JOB_EXCLUSIVE=NODE`, and otherwise the finalizer exports a `skipped` summary that states why.
+The short IB forms use the default collectors (`rapl`, `nvml`, `rocm_smi`, each skipped where absent). GPU requests must also match the application's needs and site GRES policy. `power:inband` and `power:both` require `--exclusive`: compute Prolog collects only for an exclusive node allocation (`SLURM_JOB_OVERSUBSCRIBE=NO` on the deployed Slurm 25.11, or `SLURM_JOB_EXCLUSIVE=NODE` on releases that set it), and otherwise the finalizer exports a `skipped` summary that states why.
 
 ## Current implementation and deployment gaps
 
@@ -35,12 +35,12 @@ Repository code and installed site scripts are separate deployment surfaces:
 - [comments.py](../shared/slurm/comments.py) recognizes all three modes and the legacy alias and enforces `250 <= interval_ms <= 60000`, but still permits or ignores other requests that the proposed strict contract must reject.
 - [dispatcher.py](../shared/slurm/dispatcher.py) queues IB and hybrid attempts for [finalizer.py](../shared/slurm/finalizer.py) and still runs the OOB handler synchronously for OOB and hybrid requests. The finalizer exports IB results separately from the OOB report; a combined hybrid report is not implemented.
 - [hooks.py](../inband/hooks.py), [runner.py](../inband/runner.py), [stager.py](../inband/stager.py), and the [runner](../shared/slurm/repacss-power-ib@.service) and [stager](../shared/slurm/repacss-power-stage@.service) units implement the compute-node lifecycle. The hooks read the comment, partition, and start time only from the Prolog environment, never touch shared storage, and skip invalid comments; both wrappers exit 0 on failure. The runner takes a final sample after SIGTERM and seals its spool.
-- Collectors write rotating chunks to node-local spool through [chunks.py](../inband/chunks.py); after Epilog, the stager publishes the sealed inventory with `.done` last. The default staging root, `/mnt/SHARED-AREA/repacss-power-staging`, does not exist yet, and root write access to it under the NFS export policy is unverified.
+- Collectors write rotating chunks to node-local spool through [chunks.py](../inband/chunks.py); after Epilog, the stager publishes the sealed inventory with `.done` last. The staging root is set with `MONSTER_POWER_IB_STORE_ROOT` and must be a shared file system that root on every compute node can write under the export policy.
 - [rapl.py](../inband/collectors/rapl.py) samples only audited domains that pass startup validation in [profiles.py](../inband/profiles.py), and keys counter state by path. It replaced runtime `rglob` discovery, which found no domains through the symlinked `/sys/class/powercap` tree on Python 3.9 and keyed state by the repeated names `dram` and `core`.
-- The in-band path no longer imports pandas, so `/usr/bin/python3` (3.9.18 on `narumuu`) can run the runner as well as the hooks.
+- The in-band path no longer imports pandas, so the system `/usr/bin/python3` can run the runner as well as the hooks.
 - The repository [controller wrapper](../src/services/slurm.epilogslurmctld) still sleeps, creates output directories, and invokes the synchronous dispatcher.
 
-The `/etc/slurm` snapshot inspected on `narumuu` uses `/etc/slurm/scripts/slurm.prolog`, `slurm.epilog`, and `slurm.epilogslurmctld`. Its controller wrapper still matches only `power_profiling` and calls the legacy `slurm_power_query.py`. Its compute wrappers include ECHO integration but no REPACSS IB invocation. Verify the active copies on the controllers and compute nodes before deployment; editing this repository does not update those copies.
+A site typically already has its own Prolog, Epilog, and EpilogSlurmctld scripts. A legacy controller wrapper may match only `power_profiling` and call the legacy `slurm_power_query.py`, and compute wrappers may carry other integrations. Append the REPACSS hooks to them rather than replacing them. Verify the active copies on the controllers and compute nodes before deployment; editing this repository does not update those copies.
 
 ## Repository change map
 
@@ -69,7 +69,7 @@ The RAPL profile describes available hardware. It must not replace dynamic alloc
 
 | Deployment location | Required action |
 | --- | --- |
-| Controllers: site `job_submit.lua` and `slurm.conf` | Not required for IB: Prolog enforces `--exclusive` and validates the request. The site's `job_submit.lua` exists but `JobSubmitPlugins=lua` is commented out; enabling it would apply the full site policy to every job, so any submission-time rejection of non-exclusive IB requests is a site decision. Verify which request and run-identity variables the installed Slurm version exports, including `SLURM_JOB_EXCLUSIVE`. |
+| Controllers: site `job_submit.lua` and `slurm.conf` | Not required for IB: Prolog enforces `--exclusive` and validates the request. Rejecting non-exclusive IB requests at submission would need a site `job_submit.lua` policy, which is a site decision. Verify which request and run-identity variables the installed Slurm version exports. Slurm 25.11 gives Prolog `SLURM_JOB_OVERSUBSCRIBE` and no `SLURM_JOB_EXCLUSIVE`. |
 | Every participating compute node: `/etc/slurm/scripts/slurm.prolog` | Compose the REPACSS helper with existing site/ECHO logic. The helper starts a local runner for IB/both. |
 | Every participating compute node: `/etc/slurm/scripts/slurm.epilog` | Stop the exact saved IB run and notify stage-out. Arrange ordering with user cleanup and ECHO; preserve unrelated site behavior. |
 | Every participating compute node: systemd units and local installation | Install the runner, stager, profile, sensor access rules, and `/var/spool/repacss-power`. Use `/run/repacss-power` only for transient runtime state. |
@@ -77,7 +77,7 @@ The RAPL profile describes available hardware. It must not replace dynamic alloc
 | Finalizer host: controller or `monitor` | Install the worker and report-delivery configuration. If it runs on `monitor`, add reliable background transfer from controller-local queues and account for controller failover. |
 | Shared filesystem | Provision staging and report roots with appropriate service/user identities, permissions, and retention. Verify write and delivery behavior with the actual NFS export policy. |
 
-The inspected configuration has `SlurmdUser=root` and `PrologFlags=X11,Contain`. `Contain` already implies `Alloc`, so preserve these existing flags. Evaluate adding `DeferBatch` only if the batch launch must wait for all nodes, and pair it with real runner readiness. Do not replace the site's complete flag list or hook timeout values with a generic example. See the [Slurm configuration reference](https://slurm.schedmd.com/slurm.conf.html).
+Compute Prolog and Epilog normally run as `SlurmdUser=root`. If the site sets `PrologFlags=Contain`, it already implies `Alloc`; preserve the existing flags. Evaluate adding `DeferBatch` only if the batch launch must wait for all nodes, and pair it with real runner readiness. Do not replace the site's complete flag list or hook timeout values with a generic example. See the [Slurm configuration reference](https://slurm.schedmd.com/slurm.conf.html).
 
 ## Permissions
 
@@ -190,12 +190,12 @@ Slurm runs compute-node Prolog and Epilog as `SlurmdUser` (root here), outside t
 
 | File | Reader | Observed access | Result |
 | --- | --- | --- | --- |
-| Domain `name`, `max_energy_range_uj` | Runner at start | `0444` on `narumuu` | Any user can read them. |
+| Domain `name`, `max_energy_range_uj` | Runner at start | `0444` on the audited nodes | Any user can read them. |
 | Domain `energy_uj` | Runner, every sample | `0400 root` on all 119 audited nodes | Root hooks and the current unit, which has no `User=`, can read it. A `User=repacss-power` unit needs a permission rule that is reapplied whenever domains are re-registered. As non-root, validation reports `permission_denied`. |
 | Profile | Runner at start | Packaged `inband/rapl_profiles.json`; `REPACSS_POWER_RAPL_PROFILES` overrides it | Use a copy on local disk in production. Under NFS `root_squash`, root reads as an unprivileged user, and an NFS outage stalls the hook. |
 | Prolog run state | Epilog | `/run/repacss-power/`, local tmpfs (current `DEFAULT_STATE_DIR`) | Readable; Epilog needs only the exact unit name from it. |
 | Manifest | Finalizer, through the staged copy | Written by the runner | Epilog does not need it. |
-| Code and interpreter | Wrappers and runner | Repository on NFS through `PYTHONPATH`; `/usr/bin/python3` 3.9.18 | The in-band path no longer imports pandas, so the system interpreter runs both hooks and runner. Production should still use an installed package on local disk. |
+| Code and interpreter | Wrappers and runner | Repository on NFS through `PYTHONPATH`; system `/usr/bin/python3` | The in-band path no longer imports pandas, so the system interpreter runs both hooks and runner. Production should still use an installed package on local disk. |
 
 The wrappers set `PATH` explicitly, default to `/usr/bin/python3`, and always exit 0, logging any helper failure with `logger -t repacss-power`. Before this change, they found `python3` and `systemctl` only through bash's unexported default `PATH` and Python's `os.defpath` fallback.
 

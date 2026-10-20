@@ -6,7 +6,7 @@ This directory contains the initial eGauge Web API connector for REPACSS.
 
 Current scope:
 
-- connect directly to the private meter when running inside REPACSS, or open an SSH jump-host tunnel through `narumuu.ttu.edu` from outside REPACSS
+- connect directly to the private meter when running inside REPACSS, or open an SSH jump-host tunnel from outside REPACSS
 - authenticate against an eGauge meter with the documented JWT login flow
 - query `/register` for current register rates and optional historical register rows
 
@@ -20,7 +20,7 @@ Relevant variables:
 
 ```bash
 REPACSS_EGAUGE_SCHEME=https
-REPACSS_EGAUGE_HOST=192.168.4.81
+REPACSS_EGAUGE_HOST=<egauge-private-address>
 REPACSS_EGAUGE_PORT=443
 REPACSS_EGAUGE_API_PREFIX=/api
 REPACSS_EGAUGE_USERNAME=your_eguage_username
@@ -29,7 +29,7 @@ REPACSS_EGAUGE_VERIFY_SSL=false
 REPACSS_EGAUGE_TIMEOUT=30
 REPACSS_EGAUGE_ACCESS_MODE=auto
 
-REPACSS_EGAUGE_SSH_HOSTNAME=narumuu.ttu.edu
+REPACSS_EGAUGE_SSH_HOSTNAME=jump.example.org
 REPACSS_EGAUGE_SSH_PORT=22
 REPACSS_EGAUGE_SSH_USERNAME=your_ssh_username
 REPACSS_EGAUGE_SSH_KEY_PATH=/path/to/your/private/key

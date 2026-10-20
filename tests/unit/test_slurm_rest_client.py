@@ -8,9 +8,9 @@ from shared.slurm.rest_client import SlurmRESTClient
 
 def _config() -> SlurmRESTConfig:
     return SlurmRESTConfig(
-        host="nuetu",
+        host="slurm-rest.example.org",
         port=6820,
-        user="yongzhao",
+        user="alice",
         headnode="repacss",
         jobs_path="/slurm/v0.0.42/jobs/",
         nodes_path="/slurm/v0.0.42/nodes/",

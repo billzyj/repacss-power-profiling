@@ -55,7 +55,7 @@ OOB reads Monster-backed TimescaleDB data through the shared REPACSS connection 
 - `REPACSS_DB_ACCESS_MODE=direct` always skips SSH
 - `REPACSS_DB_ACCESS_MODE=tunnel` always uses SSH
 
-The default jump host in `env.template` is `narumuu.ttu.edu`. Keep real database credentials and SSH settings in the local root `.env`; that file is ignored by git.
+Set the jump host and keep real database credentials and SSH settings in the local root `.env`; that file is ignored by git. The code ships no site hosts or credentials as defaults.
 
 ## Quick Start
 
@@ -80,8 +80,8 @@ Preview one job-scoped export:
 
 ```bash
 python3 -m cli oob job \
-  --job-id 96597 \
-  --user kalebuch \
+  --job-id 123456 \
+  --user alice \
   --nodelist "rpg-93-[1-2]" \
   --start "2026-04-13 00:00:00" \
   --end "2026-04-13 01:00:00"
@@ -90,25 +90,25 @@ python3 -m cli oob job \
 If Slurm REST is configured, the CLI can also resolve the time window and node list from SlurmDBD using only the job id:
 
 ```bash
-python3 -m cli oob job --job-id 96597
+python3 -m cli oob job --job-id 123456
 ```
 
 Write the full OOB export bundle for a job:
 
 ```bash
 python3 -m cli export \
-  --job 96597 \
-  --user kalebuch \
+  --job 123456 \
+  --user alice \
   --nodelist "rpg-93-[1-2]" \
   --start "2026-04-13 00:00:00" \
   --end "2026-04-13 01:00:00" \
-  --output output/export-96597
+  --output output/export-123456
 ```
 
 With Slurm REST configured, this shorter form is also supported:
 
 ```bash
-python3 -m cli export --job 96597 --output output/export-96597
+python3 -m cli export --job 123456 --output output/export-123456
 ```
 
 That export path writes:
@@ -187,8 +187,8 @@ from oob.backends.monster_db.backend import MonsterDBBackend
 from shared.models import SlurmJobContext
 
 context = SlurmJobContext(
-    job_id="96597",
-    user="kalebuch",
+    job_id="123456",
+    user="alice",
     nodelist="rpg-93-[1-2]",
     nodes=["rpg-93-1", "rpg-93-2"],
     start_time=datetime(2026, 4, 13, 0, 0, 0),
@@ -239,7 +239,7 @@ from pathlib import Path
 
 from oob.slurm.epilog_handler import handle_oob_job
 
-output_dir = handle_oob_job(context, Path("output/export-96597"))
+output_dir = handle_oob_job(context, Path("output/export-123456"))
 print(output_dir)
 ```
 
@@ -286,7 +286,7 @@ Relevant environment variables include:
 By default, `handle_oob_job()` writes under:
 
 ```text
-/mnt/SHARED-AREA/power_reports/<user>/<job_id>/
+/var/lib/repacss-power/reports/<user>/<job_id>/
 ```
 
 Set `MONSTER_POWER_BASE` to change the base directory, or pass `out_dir` explicitly.
@@ -298,7 +298,7 @@ When no Slurm job environment is available, OOB can resolve a completed job from
 ```python
 from shared.slurm.resolver import resolve_job_context
 
-context = resolve_job_context("96597")
+context = resolve_job_context("123456")
 ```
 
 This path requests a short-lived token by running:
@@ -313,10 +313,10 @@ Then it calls:
 http://<host>:<port><db_job_path><job_id>
 ```
 
-For the MonSTer-compatible values below, that becomes:
+For example, with `REPACSS_SLURM_REST_HOST=slurm-rest.example.org` and the default port and path:
 
 ```text
-http://nuetu:6820/slurmdb/v0.0.42/job/96597
+http://slurm-rest.example.org:6820/slurmdb/v0.0.42/job/123456
 ```
 
 `slurm_rest_user` is sent as `X-SLURM-USER-NAME` in the HTTP request. It is not the SSH login user; SSH still uses the current shell identity or the matching entry in `~/.ssh/config`.
@@ -326,10 +326,10 @@ http://nuetu:6820/slurmdb/v0.0.42/job/96597
 OOB uses the same `.env` file as the database and SSH settings. Add the Slurm REST settings beside the existing DB configuration:
 
 ```bash
-REPACSS_SLURM_REST_HOST=nuetu
+REPACSS_SLURM_REST_HOST=slurm-rest.example.org
 REPACSS_SLURM_REST_PORT=6820
-REPACSS_SLURM_REST_USER=yongzhao
-REPACSS_SLURM_REST_HEADNODE=repacss
+REPACSS_SLURM_REST_USER=<your-cluster-username>
+REPACSS_SLURM_REST_HEADNODE=<ssh-host-that-runs-scontrol-token>
 REPACSS_SLURM_REST_JOBS_PATH=/slurm/v0.0.42/jobs/
 REPACSS_SLURM_REST_NODES_PATH=/slurm/v0.0.42/nodes/
 REPACSS_SLURM_REST_JOB_PATH=/slurm/v0.0.42/job/

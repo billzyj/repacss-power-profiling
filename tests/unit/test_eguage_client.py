@@ -45,7 +45,7 @@ def _settings() -> EGaugeSettings:
     return EGaugeSettings(
         api=EGaugeAPIConfig(
             scheme="https",
-            host="192.168.4.81",
+            host="192.0.2.10",
             port=443,
             api_prefix="/api",
             username="owner",
@@ -54,7 +54,7 @@ def _settings() -> EGaugeSettings:
             timeout=15,
         ),
         ssh=EGaugeSSHConfig(
-            hostname="narumuu.ttu.edu",
+            hostname="jump.example.org",
             port=22,
             username="jump-user",
             private_key_path=None,
@@ -128,4 +128,4 @@ def test_client_connects_direct_when_access_mode_is_direct() -> None:
     client.connect()
 
     assert client.tunnel is None
-    assert client.base_url == "https://192.168.4.81:443/api"
+    assert client.base_url == "https://192.0.2.10:443/api"

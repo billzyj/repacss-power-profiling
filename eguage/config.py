@@ -108,7 +108,7 @@ def get_eguage_settings() -> EGaugeSettings:
 
     api = EGaugeAPIConfig(
         scheme=(os.getenv("REPACSS_EGAUGE_SCHEME", "https").strip() or "https").lower(),
-        host=os.getenv("REPACSS_EGAUGE_HOST", "192.168.4.81").strip() or "192.168.4.81",
+        host=os.getenv("REPACSS_EGAUGE_HOST", "").strip(),
         port=int(os.getenv("REPACSS_EGAUGE_PORT", "443").strip() or 443),
         api_prefix=_normalize_api_prefix(os.getenv("REPACSS_EGAUGE_API_PREFIX", "/api")),
         username=os.getenv("REPACSS_EGAUGE_USERNAME", "").strip(),

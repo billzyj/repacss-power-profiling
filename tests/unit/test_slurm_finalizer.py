@@ -85,7 +85,7 @@ def test_dispatcher_queues_inband_jobs_under_the_compute_node_key(tmp_path: Path
         "SLURM_JOB_START_TIME": str(START),
         "SLURM_JOB_END_TIME": str(START + 10),
         "SLURM_JOB_COMMENT": "power:both;collectors=rapl",
-        "SLURM_JOB_EXCLUSIVE": "NODE",
+        "SLURM_JOB_OVERSUBSCRIBE": "NO",  # what Slurm 25.11 gives EpilogSlurmctld for --exclusive
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -107,7 +107,7 @@ def test_dispatcher_queues_inband_jobs_under_the_compute_node_key(tmp_path: Path
 
 def test_a_job_without_exclusive_nodes_gets_an_immediate_explanation(tmp_path: Path):
     config = _config(tmp_path)
-    _, record = _queue(config, ["rpg-93-1"], now=1000.0, exclusive="NO")
+    _, record = _queue(config, ["rpg-93-1"], now=1000.0, exclusive="OVERSUBSCRIBE=OK")
 
     assert process_queue(config, now=1000.0) == 1  # no waiting for nodes that never start
 
@@ -115,4 +115,4 @@ def test_a_job_without_exclusive_nodes_gets_an_immediate_explanation(tmp_path: P
     assert sorted(path.name for path in target.iterdir()) == ["summary.json"]
     summary = read_json_file(target / "summary.json")
     assert summary["status"] == "skipped"
-    assert "--exclusive" in summary["reason"] and "SLURM_JOB_EXCLUSIVE=NO" in summary["reason"]
+    assert "--exclusive" in summary["reason"] and "OVERSUBSCRIBE=OK" in summary["reason"]

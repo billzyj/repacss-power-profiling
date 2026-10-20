@@ -157,7 +157,7 @@ def test_check_command_samples_counters_and_detects_a_wrap(fake_powercap, monkey
 
 
 def test_check_command_explains_an_unverified_node(capsys):
-    assert profiles.main(["--partition", "zen4", "--node", "tabe"]) == 1
+    assert profiles.main(["--partition", "zen4", "--node", "headnode"]) == 1
     captured = capsys.readouterr()
     assert json.loads(captured.out)["reason"] == "unverified_node"
     assert "run it on a node of that partition" in captured.err

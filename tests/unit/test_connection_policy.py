@@ -38,14 +38,14 @@ def test_auto_access_mode_uses_direct_when_probe_succeeds() -> None:
 def test_auto_access_mode_uses_tunnel_when_probe_fails() -> None:
     decision = resolve_access_decision(
         source="eguage",
-        target_host="192.168.4.81",
+        target_host="192.0.2.10",
         target_port=443,
         access_mode="auto",
         probe=lambda _host, _port, _timeout: False,
     )
 
     assert decision.use_tunnel is True
-    assert decision.reason == "direct probe to 192.168.4.81:443 failed"
+    assert decision.reason == "direct probe to 192.0.2.10:443 failed"
 
 
 def test_explicit_tunnel_mode_does_not_probe() -> None:

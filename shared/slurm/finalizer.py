@@ -40,7 +40,7 @@ from shared.slurm.resolver import parse_job_start_epoch
 LOGGER = logging.getLogger("repacss_power.slurm.finalizer")
 
 DEFAULT_REPORT_ROOT = Path(
-    os.environ.get("REPACSS_POWER_REPORT_ROOT") or os.environ.get("MONSTER_POWER_BASE") or "/mnt/SHARED-AREA/power_reports"
+    os.environ.get("REPACSS_POWER_REPORT_ROOT") or os.environ.get("MONSTER_POWER_BASE") or "/var/lib/repacss-power/reports"
 )
 DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("REPACSS_POWER_IB_FINALIZE_TIMEOUT_SECONDS", "600"))
 EXPORT_DIRNAME = "power_profile"
@@ -241,11 +241,11 @@ def try_finalize(config: FinalizerConfig, record: Mapping[str, Any], now: float)
     if target.exists():
         return {"status": "already_exported", "export_dir": str(target)}
     if record.get("exclusive") != EXCLUSIVE_NODE:
-        exclusive = record.get("exclusive") or "unset"
+        exclusive = record.get("exclusive") or "no exclusivity setting"
         return _write_skipped_export(
             config,
             record,
-            f"In-band collection requires --exclusive; the job ran with SLURM_JOB_EXCLUSIVE={exclusive}.",
+            f"In-band collection requires --exclusive; Slurm reported {exclusive} for this job.",
         )
     job_dir, notes = _locate_job_dir(config, record)
     waiting = [node for node in record["nodes"] if not (job_dir / node / DONE_FILENAME).exists()]
@@ -295,7 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     manual.add_argument("--start", default="", help="Job start as epoch seconds or ISO time; omit to skip clipping.")
     manual.add_argument("--end", default="", help="Job end as epoch seconds or ISO time; omit to skip clipping.")
     manual.add_argument("--timeout-seconds", type=float, default=0.0, help="Wait this long for missing nodes.")
-    manual.add_argument("--exclusive", default=EXCLUSIVE_NODE, help="SLURM_JOB_EXCLUSIVE value of the job.")
+    manual.add_argument("--exclusive", default=EXCLUSIVE_NODE, help="Job exclusivity as hooks.job_exclusive reports it.")
     return parser
 
 

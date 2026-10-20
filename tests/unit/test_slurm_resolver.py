@@ -20,10 +20,10 @@ def test_parse_job_start_epoch_accepts_utc_z_suffix() -> None:
 def test_resolve_job_context_from_rest_maps_slurmdb_payload(monkeypatch) -> None:
     class _FakeClient:
         def get_job(self, job_id: str, *, from_database: bool = True):
-            assert job_id == "96597"
+            assert job_id == "123456"
             assert from_database is True
             return {
-                "job_id": 96597,
+                "job_id": 123456,
                 "user": {"name": "alice"},
                 "nodes": "rpg-93-1,rpg-93-2",
                 "time": {
@@ -36,9 +36,9 @@ def test_resolve_job_context_from_rest_maps_slurmdb_payload(monkeypatch) -> None
 
     monkeypatch.setattr("shared.slurm.resolver.config.validate_slurm_rest_config", lambda: [])
 
-    context = resolve_job_context_from_rest("96597", client=_FakeClient())
+    context = resolve_job_context_from_rest("123456", client=_FakeClient())
 
-    assert context.job_id == "96597"
+    assert context.job_id == "123456"
     assert context.user == "alice"
     assert context.nodes == ["rpg-93-1", "rpg-93-2"]
     assert context.start_time == datetime(2026, 4, 13, 0, 0, 0)

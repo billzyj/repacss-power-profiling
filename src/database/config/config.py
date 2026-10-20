@@ -62,14 +62,14 @@ class Config:
         self.db_host = os.getenv('REPACSS_DB_HOST', self.db_host or 'localhost')
         self.db_port = int(os.getenv('REPACSS_DB_PORT', self.db_port or 5432))
         self.db_default_name = os.getenv('REPACSS_DB_DEFAULT', self.db_default_name or 'h100')
-        self.db_user = os.getenv('REPACSS_DB_USER', self.db_user or 'monster')
-        self.db_password = os.getenv('REPACSS_DB_PASSWORD', self.db_password or 'repacss')
+        self.db_user = os.getenv('REPACSS_DB_USER', self.db_user or '')
+        self.db_password = os.getenv('REPACSS_DB_PASSWORD', self.db_password or '')
         self.db_ssl_mode = os.getenv('REPACSS_DB_SSL_MODE', self.db_ssl_mode or 'prefer')
         
         # Note: treat empty strings in .env as "unset" so users can rely on
         # system ssh defaults (current username, ssh-agent, ~/.ssh/config).
         ssh_hostname_env = os.getenv('REPACSS_SSH_HOSTNAME')
-        self.ssh_hostname = (ssh_hostname_env or "").strip() or (self.ssh_hostname or 'narumuu.ttu.edu')
+        self.ssh_hostname = (ssh_hostname_env or "").strip() or (self.ssh_hostname or '')
 
         ssh_port_env = os.getenv('REPACSS_SSH_PORT')
         self.ssh_port = int((ssh_port_env or "").strip() or (self.ssh_port or 22))

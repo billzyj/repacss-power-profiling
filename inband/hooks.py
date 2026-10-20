@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import logging.handlers
 import os
 import re
 import socket
@@ -41,18 +42,35 @@ from shared.slurm.resolver import parse_job_start_epoch
 
 LOGGER = logging.getLogger("repacss_power.inband.hooks")
 SAFE_TOKEN = re.compile(r"[A-Za-z0-9_.-]+")
-# RAPL and NVML measure the whole node, so collection requires `--exclusive`, which
-# Slurm reports as SLURM_JOB_EXCLUSIVE=NODE.
+# RAPL and NVML measure the whole node, so collection requires `--exclusive`. Newer Slurm
+# releases report it as SLURM_JOB_EXCLUSIVE=NODE. Slurm 25.11
+# sets only SLURM_JOB_OVERSUBSCRIBE, which is NO for an --exclusive job and OK otherwise.
 EXCLUSIVE_NODE = "NODE"
 
 
 def job_exclusive(env: Dict[str, str]) -> str:
-    return (env.get("SLURM_JOB_EXCLUSIVE") or "").strip().upper()
+    """Return NODE when the job holds its nodes exclusively, otherwise what Slurm reported."""
+    exclusive = (env.get("SLURM_JOB_EXCLUSIVE") or "").strip().upper()
+    if exclusive:
+        return exclusive
+    oversubscribe = (env.get("SLURM_JOB_OVERSUBSCRIBE") or "").strip().upper()
+    if oversubscribe == "NO":
+        return EXCLUSIVE_NODE
+    return f"OVERSUBSCRIBE={oversubscribe}" if oversubscribe else ""
 
 
 def _configure_logging() -> None:
     level = logging.DEBUG if os.environ.get("MONSTER_POWER_DEBUG") == "1" else logging.INFO
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s")
+    # slurmd discards hook output. Also send hook messages to the journal, so the reason
+    # a job was skipped can be found with `journalctl -t repacss-power-hooks`.
+    try:
+        handler = logging.handlers.SysLogHandler(address="/dev/log")
+    except OSError:
+        return
+    handler.ident = "repacss-power-hooks: "
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    logging.getLogger().addHandler(handler)
 
 
 def _required_env(name: str, env: Dict[str, str]) -> str:
@@ -122,9 +140,9 @@ def _build_base_state(env: Dict[str, str]) -> Optional[Dict[str, str]]:
         return None
     if job_exclusive(env) != EXCLUSIVE_NODE:
         LOGGER.warning(
-            "job %s requested in-band collection without --exclusive (SLURM_JOB_EXCLUSIVE=%s); skipping",
+            "job %s requested in-band collection without --exclusive (Slurm reported %s); skipping",
             job_id,
-            job_exclusive(env) or "unset",
+            job_exclusive(env) or "no exclusivity setting",
         )
         return None
 

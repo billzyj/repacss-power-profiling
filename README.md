@@ -128,15 +128,15 @@ REPACSS_EGAUGE_ACCESS_MODE=auto
 REPACSS_INTERNAL_PROBE_TIMEOUT=1.0
 
 # SSH Settings (replace with your actual values)
-REPACSS_SSH_HOSTNAME=narumuu.ttu.edu
+REPACSS_SSH_HOSTNAME=jump.example.org
 REPACSS_SSH_USERNAME=your_ssh_username
 REPACSS_SSH_KEY_PATH=/path/to/your/private/key
 
 # Legacy eGauge API settings, used only by the unsupported eGauge connector
-REPACSS_EGAUGE_HOST=192.168.4.81
+REPACSS_EGAUGE_HOST=<egauge-private-address>
 REPACSS_EGAUGE_USERNAME=your_eguage_username
 REPACSS_EGAUGE_PASSWORD=your_eguage_password
-REPACSS_EGAUGE_SSH_HOSTNAME=narumuu.ttu.edu
+REPACSS_EGAUGE_SSH_HOSTNAME=jump.example.org
 ```
 
 **Access Modes:**
@@ -189,10 +189,10 @@ python3 -m cli oob query --hostname rpg-93-1 --start "2025-01-01 00:00:00" --end
 python3 -m cli oob query --hostname rpc-91-2 --start "2025-01-01 00:00:00" --end "2025-01-01 01:00:00" --output output/query.csv --format csv
 
 # Manual OOB job export
-python3 -m cli oob job --job-id 96597 --user kalebuch --nodelist rpg-93-6 --start "2026-04-13 00:00:00" --end "2026-04-13 01:00:00"
+python3 -m cli oob job --job-id 123456 --user alice --nodelist rpg-93-6 --start "2026-04-13 00:00:00" --end "2026-04-13 01:00:00"
 
 # Generic export surface (currently OOB-backed in P0-P2)
-python3 -m cli export --job 96597 --user kalebuch --nodelist rpg-93-6 --start "2026-04-13 00:00:00" --end "2026-04-13 01:00:00" --output output/export-96597
+python3 -m cli export --job 123456 --user alice --nodelist rpg-93-6 --start "2026-04-13 00:00:00" --end "2026-04-13 01:00:00" --output output/export-123456
 
 # Legacy eGauge connector (unsupported; kept for reference)
 # Probe the eGauge tunnel and API auth path

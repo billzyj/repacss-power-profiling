@@ -11,7 +11,7 @@ def _db_config() -> DatabaseConfig:
         host="db.internal",
         port=5432,
         database="h100",
-        username="monster",
+        username="db-user",
         password="secret",
         ssl_mode="prefer",
         schema="idrac",
@@ -20,7 +20,7 @@ def _db_config() -> DatabaseConfig:
 
 def _ssh_config() -> SSHConfig:
     return SSHConfig(
-        hostname="narumuu.ttu.edu",
+        hostname="jump.example.org",
         port=22,
         username="jump-user",
         private_key_path=None,
@@ -46,7 +46,7 @@ def test_monster_db_client_uses_direct_connection_when_configured(
         host="db.internal",
         port=5432,
         database="h100",
-        user="monster",
+        user="db-user",
         password="secret",
         sslmode="prefer",
     )

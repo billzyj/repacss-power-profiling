@@ -7,7 +7,7 @@ PYTHON="${MONSTER_POWER_PYTHON:-/opt/repacss-power-profiling/.venv/bin/python}"
 DELAY="${MONSTER_POWER_DELAY_SECONDS:-10}"
 
 # Output layout: POWER_BASE/{userid}/{job_id}/
-POWER_BASE="${MONSTER_POWER_BASE:-/mnt/SHARED-AREA/power_reports}"
+POWER_BASE="${MONSTER_POWER_BASE:-/var/lib/repacss-power/reports}"
 
 DEBUG="${MONSTER_POWER_DEBUG:-0}"   # set to 1 to enable verbose logs
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

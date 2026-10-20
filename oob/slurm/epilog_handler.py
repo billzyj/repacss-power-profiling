@@ -450,7 +450,7 @@ def plot_pie(pie_segments: Dict[str, float], path: Path, job_id: Optional[str] =
 def handle_oob_job(context: SlurmJobContext, out_dir: Optional[Path] = None) -> Path:
     """Run the OOB job export for a Slurm job context."""
     if out_dir is None:
-        power_base = Path(os.environ.get("MONSTER_POWER_BASE", "/mnt/SHARED-AREA/power_reports"))
+        power_base = Path(os.environ.get("MONSTER_POWER_BASE", "/var/lib/repacss-power/reports"))
         out_dir = power_base / context.user / context.job_id
     out_dir.mkdir(parents=True, exist_ok=True)
 

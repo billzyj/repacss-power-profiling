@@ -25,7 +25,8 @@ def _base_env(tmp_path: Path) -> dict[str, str]:
         "SLURMD_NODENAME": "rpg-93-1",
         "SLURM_JOB_PARTITION": "h100",
         "SLURM_JOB_START_TIME": "1775808000",
-        "SLURM_JOB_EXCLUSIVE": "NODE",
+        # What slurmd 25.11 gives the Prolog of an --exclusive job; it sets no SLURM_JOB_EXCLUSIVE.
+        "SLURM_JOB_OVERSUBSCRIBE": "NO",
         "MONSTER_POWER_STATE_DIR": str(tmp_path / "run"),
         "MONSTER_POWER_IB_STORE_ROOT": str(tmp_path / "stage root"),
         "REPACSS_POWER_IB_LOCAL_SPOOL_ROOT": str(tmp_path / "spool"),
@@ -132,14 +133,37 @@ def test_epilog_without_state_does_nothing(tmp_path: Path, monkeypatch):
     assert calls == []
 
 
-@pytest.mark.parametrize("exclusive", [None, "NO", "USER"])
-def test_prolog_skips_a_job_without_an_exclusive_node(tmp_path: Path, monkeypatch, exclusive):
+@pytest.mark.parametrize(
+    "env_update,expected",
+    [
+        ({"SLURM_JOB_OVERSUBSCRIBE": "NO"}, "NODE"),  # Slurm 25.11, --exclusive
+        ({"SLURM_JOB_OVERSUBSCRIBE": "OK"}, "OVERSUBSCRIBE=OK"),  # Slurm 25.11, may share nodes
+        ({}, ""),
+        ({"SLURM_JOB_EXCLUSIVE": "NODE"}, "NODE"),  # newer Slurm
+        ({"SLURM_JOB_EXCLUSIVE": "user", "SLURM_JOB_OVERSUBSCRIBE": "NO"}, "USER"),  # the explicit variable wins
+    ],
+)
+def test_job_exclusive_reads_both_slurm_variables(env_update, expected):
+    assert hooks.job_exclusive(env_update) == expected
+
+
+@pytest.mark.parametrize(
+    "env_update",
+    [
+        {"SLURM_JOB_OVERSUBSCRIBE": "OK"},
+        {"SLURM_JOB_OVERSUBSCRIBE": "YES"},
+        {"SLURM_JOB_OVERSUBSCRIBE": None},
+        {"SLURM_JOB_EXCLUSIVE": "USER"},
+    ],
+)
+def test_prolog_skips_a_job_without_an_exclusive_node(tmp_path: Path, monkeypatch, env_update):
     env = _base_env(tmp_path)
     env["SLURM_JOB_COMMENT"] = "power:inband"
-    if exclusive is None:
-        del env["SLURM_JOB_EXCLUSIVE"]
-    else:
-        env["SLURM_JOB_EXCLUSIVE"] = exclusive
+    for key, value in env_update.items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
     calls = _record_systemctl(monkeypatch)
 
     assert hooks.run_prolog(env) == 0
