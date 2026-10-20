@@ -6,12 +6,14 @@ import os
 import re
 import subprocess
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from shared.config import config
 from shared.errors import SlurmResolutionError
 from shared.models import SlurmJobContext
-from shared.slurm.rest_client import SlurmRESTClient
+
+if TYPE_CHECKING:  # the REST client needs `requests`, which job-end hooks do not
+    from shared.slurm.rest_client import SlurmRESTClient
 
 try:
     import hostlist
@@ -218,7 +220,11 @@ def resolve_job_context_from_rest(job_id: str, client: Optional[SlurmRESTClient]
     if issues:
         raise SlurmResolutionError("; ".join(issues))
 
-    rest_client = client or SlurmRESTClient(slurm_config)
+    rest_client = client
+    if rest_client is None:
+        from shared.slurm.rest_client import SlurmRESTClient
+
+        rest_client = SlurmRESTClient(slurm_config)
     job = rest_client.get_job(job_id, from_database=True)
     if not job:
         raise SlurmResolutionError(f"No Slurm job found for job_id={job_id}")
