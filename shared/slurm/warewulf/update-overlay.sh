@@ -58,6 +58,7 @@ mkdir -p "$work/code" "$work/units"
 git -c safe.directory="$CHECKOUT" -C "$CHECKOUT" archive "$commit" inband shared | tar -x -C "$work/code"
 find "$work/code" -name '*.ww' -delete
 echo "$commit" > "$work/code/RELEASE"
+chmod -R u+rwX,go+rX,go-w "$work/code"  # 0644 files, 0755 directories and scripts, whatever git's tar.umask
 for unit in "${UNITS[@]}"; do cp "$work/code/shared/slurm/$unit" "$work/units/$unit"; done
 
 dry=(--dry-run)

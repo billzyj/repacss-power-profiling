@@ -109,10 +109,18 @@ def test_update_overlay_writes_one_release_and_nothing_else(tmp_path: Path):
     assert (code / "RELEASE").read_text(encoding="utf-8").strip() == head.stdout.strip()
     assert (code / "inband" / "hooks.py").is_file() and (code / "shared" / "slurm" / "warewulf" / "slurm.prolog.block").is_file()
     assert not list(code.rglob("*.ww"))  # Warewulf would render these as templates
-    assert sorted(path.name for path in (rootfs / "etc" / "systemd" / "system").iterdir()) == [
-        "repacss-power-ib@.service",
-        "repacss-power-stage@.service",
-    ]
+    units = sorted((rootfs / "etc" / "systemd" / "system").iterdir())
+    assert [path.name for path in units] == ["repacss-power-ib@.service", "repacss-power-stage@.service"]
+    modes = {
+        path: path.stat().st_mode & 0o777
+        for path in [code / "inband", code / "inband" / "hooks.py", code / "shared" / "slurm" / "repacss-power.prolog.sh", *units]
+    }
+    assert modes == {
+        code / "inband": 0o755,
+        code / "inband" / "hooks.py": 0o644,
+        code / "shared" / "slurm" / "repacss-power.prolog.sh": 0o755,
+        **{unit: 0o644 for unit in units},
+    }
 
     stale = code / "inband" / "stale.py"
     stale.write_text("left from an older release\n", encoding="utf-8")
