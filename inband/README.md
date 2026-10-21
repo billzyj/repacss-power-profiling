@@ -235,9 +235,11 @@ Initial values:
 | `mode` | `oob`, `inband`, `both` | required |
 | `backend` | `db` in v1; valid only for `oob` and `both` | `db` |
 | `collectors` | site allowlist drawn from `rapl`, `nvml`, `nvidia_smi`, `rocm_smi` | `rapl`, `nvml`, `rocm_smi`, each skipped where unavailable |
-| `interval_ms` | site-configured bounded integer | `1000` |
+| `interval_ms` | integer, `100 <= interval_ms <= 60000` | `1000` |
 
-The initial proposed interval policy is `250 <= interval_ms <= 60000`. The exact bounds are configuration, not user-controlled policy.
+One interval applies to every collector of the job. The bounds are constants in [comments.py](../shared/slurm/comments.py); a value outside them makes the node skip in-band collection for the job. Measured counter update periods set the lower bound: RAPL advances about every 1 ms on both the Intel and the Zen4 nodes, and the NVML energy counter of an H100 NVL every 100 ms. The upper bound stays inside the Zen4 RAPL wrap time.
+
+The interval sets only the time resolution of the power series. Job energy and average power come from counter differences, so they do not depend on it. An interval of I ms contains a whole number of counter steps, give or take one, so a single interval's power can be off by up to one step: about 100/I of the GPU power (10% at 1000 ms, 40% at 250 ms) and 1/I of the RAPL power. Shorter intervals also grow the node's in-memory spool and the exported `raw_power.csv` in proportion (one row per interval and domain).
 
 Parser rules:
 

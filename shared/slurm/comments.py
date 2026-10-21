@@ -11,9 +11,11 @@ from shared.models import ParsedPowerComment
 LEGACY_KEYWORD = "power_profiling"
 VALID_MODES = {"oob", "inband", "both"}
 VALID_BACKENDS = {"db", "api"}
-# The upper bound keeps sampling well inside the Zen4 RAPL counter wrap time
-# (about 65 s at 1000 W for its 65.5 kJ range).
-MIN_INTERVAL_MS = 250
+# The lower bound is the update period of the slowest counter: RAPL advances about every
+# 1 ms, but the NVML energy counter of an H100 advances every 100 ms, so a shorter interval
+# would only repeat GPU readings. The upper bound keeps sampling well inside the Zen4 RAPL
+# counter wrap time (about 65 s at 1000 W for its 65.5 kJ range).
+MIN_INTERVAL_MS = 100
 MAX_INTERVAL_MS = 60000
 
 
