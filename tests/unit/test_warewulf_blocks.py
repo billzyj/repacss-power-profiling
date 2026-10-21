@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -81,3 +82,42 @@ def test_epilog_block_finishes_a_started_run_even_after_the_node_was_disabled(no
         "epilog ran store=/shared/staging",
         "site-continues status=0 store=unset",
     ]
+
+
+def _files(root: Path):
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
+
+
+@pytest.mark.skipif(
+    shutil.which("git") is None or shutil.which("rsync") is None or not (ROOT / ".git").exists(),
+    reason="needs git, rsync, and a git checkout",
+)
+def test_update_overlay_writes_one_release_and_nothing_else(tmp_path: Path):
+    rootfs = tmp_path / "rootfs"
+    site = rootfs / "etc" / "slurm" / "scripts" / "slurm.prolog"
+    site.parent.mkdir(parents=True)
+    site.write_text("site prolog\n", encoding="utf-8")
+    script = [str(WAREWULF / "update-overlay.sh"), "--checkout", str(ROOT), "--rootfs", str(rootfs)]
+
+    dry = subprocess.run(script, capture_output=True, text=True, check=True)
+    assert "nothing written" in dry.stdout
+    assert _files(rootfs) == ["etc/slurm/scripts/slurm.prolog"]
+
+    subprocess.run([*script, "--apply"], capture_output=True, text=True, check=True)
+    code = rootfs / "opt" / "repacss-power-profiling"
+    head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
+    assert (code / "RELEASE").read_text(encoding="utf-8").strip() == head.stdout.strip()
+    assert (code / "inband" / "hooks.py").is_file() and (code / "shared" / "slurm" / "warewulf" / "slurm.prolog.block").is_file()
+    assert not list(code.rglob("*.ww"))  # Warewulf would render these as templates
+    assert sorted(path.name for path in (rootfs / "etc" / "systemd" / "system").iterdir()) == [
+        "repacss-power-ib@.service",
+        "repacss-power-stage@.service",
+    ]
+
+    stale = code / "inband" / "stale.py"
+    stale.write_text("left from an older release\n", encoding="utf-8")
+    subprocess.run(script, capture_output=True, text=True, check=True)
+    assert stale.exists()  # a dry run changes nothing
+    subprocess.run([*script, "--apply"], capture_output=True, text=True, check=True)
+    assert not stale.exists()
+    assert site.read_text(encoding="utf-8") == "site prolog\n"  # files outside the code directory stay
