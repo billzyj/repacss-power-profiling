@@ -56,6 +56,20 @@ def test_finalizer_waits_for_nodes_then_exports_a_partial_report(tmp_path: Path)
     assert settled["outcome"]["status"] == "partial"
 
 
+def test_staging_lookup_notes_only_a_different_key(tmp_path: Path, monkeypatch):
+    config = _config(tmp_path)
+    record = {"job_id": "777", "attempt_id": "repacss-777-100", "cluster": "repacss"}
+
+    # The listing finds the expected key although the path check missed it (a stale NFS lookup).
+    monkeypatch.setattr(finalizer, "resolve_storage_key_for_job", lambda *args, **kwargs: "repacss-777-100")
+    assert finalizer._locate_job_dir(config, record) == (config.staging_root / "repacss-777-100", [])
+
+    monkeypatch.setattr(finalizer, "resolve_storage_key_for_job", lambda *args, **kwargs: "repacss-777-101")
+    job_dir, notes = finalizer._locate_job_dir(config, record)
+    assert job_dir == config.staging_root / "repacss-777-101"
+    assert notes == ["Staging directory repacss-777-100 not found; used repacss-777-101."]
+
+
 def test_finalizer_exports_once_into_the_documented_layout(tmp_path: Path):
     config = _config(tmp_path)
     stage_node(config.staging_root / "repacss-777-100", tmp_path / "spool", "rpg-93-1")

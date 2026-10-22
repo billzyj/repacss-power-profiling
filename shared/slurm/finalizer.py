@@ -155,8 +155,12 @@ def _locate_job_dir(config: FinalizerConfig, record: Mapping[str, Any]) -> Tuple
     if job_dir.exists():
         return job_dir, []
     # The controller and the compute nodes derive the key from the same Slurm start
-    # time; fall back to the newest key for this job if they ever disagree.
+    # time; fall back to the newest key for this job if they ever disagree. The listing
+    # can also find the expected key itself, when an NFS client still caches the
+    # directory as missing; that is no disagreement and needs no note.
     found = resolve_storage_key_for_job(record["job_id"], ib_store_root=config.staging_root, cluster_name=record["cluster"])
+    if found == record["attempt_id"]:
+        return config.staging_root / found, []
     if found:
         return config.staging_root / found, [f"Staging directory {record['attempt_id']} not found; used {found}."]
     return job_dir, []
