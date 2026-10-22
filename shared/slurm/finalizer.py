@@ -10,6 +10,7 @@ readings and exports:
         raw_power.csv     one row per sample interval and domain: energy (J) and power (W)
         summary.json      energy, average power, node coverage, status, and notes
         provenance.json   request, node publication records, RAPL manifests
+        *.pdf             power over time and energy by component (see `inband.plots`)
 
 The OOB report of the same job goes to `<report_root>/<user>/<job_id>/oob/`. A later
 attempt of a requeued job exports to `ib-<attempt start epoch>/` beside the first. The
@@ -58,6 +59,7 @@ class FinalizerConfig:
     queue_root: Path = DEFAULT_QUEUE_ROOT
     staging_root: Path = DEFAULT_IB_STORE_ROOT
     report_root: Path = DEFAULT_REPORT_ROOT
+    plots: bool = True
 
 
 def _iso(epoch: Optional[float]) -> Optional[str]:
@@ -189,6 +191,10 @@ def _write_export(config: FinalizerConfig, record: Mapping[str, Any], job_dir: P
         writer = csv.DictWriter(handle, fieldnames=EXPORT_COLUMNS, lineterminator="\n")
         writer.writeheader()
         result = aggregate_attempt(job_dir, expected_nodes=record["nodes"], window=window, emit=writer.writerow)
+    if config.plots:
+        from inband.plots import plot_report
+
+        notes = notes + plot_report(partial, result, record)
 
     finalized_at = datetime.now(timezone.utc).isoformat()
     summary = {

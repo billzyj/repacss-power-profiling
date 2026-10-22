@@ -46,11 +46,22 @@ METRIC_ID_TO_DISPLAY: Dict[str, str] = {
 }
 
 
+# Palatino Linotype, then free look-alikes: TeX Gyre Pagella, and URW P052 from the
+# urw-base35-p052-fonts package that Rocky Linux ships.
+PAPER_FONTS = ["Palatino Linotype", "TeX Gyre Pagella", "P052", "DejaVu Sans", "Liberation Sans"]
+
+
 def apply_paper_style() -> None:
-    """Set matplotlib rc for paper figures (font, weight). Prefer Palatino Linotype, fallback to DejaVu Sans etc."""
+    """Set matplotlib rc for paper figures: bold, in the first installed font of PAPER_FONTS.
+
+    Only installed fonts are listed, so matplotlib does not warn about each missing one.
+    """
     import matplotlib
+    from matplotlib import font_manager
+
+    installed = {font.name for font in font_manager.fontManager.ttflist}
     matplotlib.rcParams["font.family"] = "sans-serif"
-    matplotlib.rcParams["font.sans-serif"] = ["Palatino Linotype", "DejaVu Sans", "Liberation Sans", "sans-serif"]
+    matplotlib.rcParams["font.sans-serif"] = [name for name in PAPER_FONTS if name in installed] or ["DejaVu Sans"]
     matplotlib.rcParams["font.weight"] = "bold"
 
 

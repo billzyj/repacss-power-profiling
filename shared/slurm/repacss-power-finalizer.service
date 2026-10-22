@@ -11,6 +11,10 @@ Type=simple
 User=slurm
 EnvironmentFile=/etc/repacss-power/controller.env
 ExecStart=/usr/bin/env ${REPACSS_POWER_PYTHON} -m shared.slurm.finalizer run
+# matplotlib keeps its font cache here, so the report plots do not rescan the fonts at
+# every start; systemd creates /var/cache/repacss-power owned by the service user.
+CacheDirectory=repacss-power
+Environment=MPLCONFIGDIR=/var/cache/repacss-power/matplotlib
 Restart=on-failure
 RestartSec=30
 NoNewPrivileges=yes

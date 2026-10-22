@@ -17,8 +17,8 @@ START = int(T0.timestamp())
 
 
 def _config(tmp_path: Path) -> FinalizerConfig:
-    return FinalizerConfig(
-        queue_root=tmp_path / "queue", staging_root=tmp_path / "staging", report_root=tmp_path / "reports"
+    return FinalizerConfig(  # plots have their own tests in tests/unit/inband/test_plots.py
+        queue_root=tmp_path / "queue", staging_root=tmp_path / "staging", report_root=tmp_path / "reports", plots=False
     )
 
 
