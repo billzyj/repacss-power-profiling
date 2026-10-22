@@ -90,7 +90,12 @@ def test_the_finalizer_exports_plots_with_the_report(tmp_path: Path, nodes):
     assert process_queue(config, now=1000.0) == 1
 
     target = export_dir(config, record)
-    expected = {"energy_ring.pdf", "power_timeseries.pdf"} | ({"power_timeseries_by_node.pdf"} if len(nodes) > 1 else set())
-    assert {path.name for path in target.glob("*.pdf")} == expected
-    assert all(path.stat().st_size > 1000 for path in target.glob("*.pdf"))
+    if len(nodes) == 1:
+        expected = {"energy_ring.pdf", "power_timeseries.pdf"}
+    else:  # the OOB report's names for several nodes
+        expected = {"energy_ring.pdf", "power_timeseries_total.pdf", "power_timeseries_by_node.pdf"}
+        expected |= {f"power_timeseries_nodes/{node}_timeseries.pdf" for node in nodes}
+    plots = list(target.rglob("*.pdf"))
+    assert {path.relative_to(target).as_posix() for path in plots} == expected
+    assert all(path.stat().st_size > 1000 for path in plots)
     assert not [note for note in read_json_file(target / "summary.json")["notes"] if "Plots" in note or "plots" in note]

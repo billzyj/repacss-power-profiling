@@ -3,11 +3,14 @@
 The finalizer calls `plot_report` once `raw_power.csv` is written. Plots are a
 convenience: a failure becomes a note in the summary and never fails the export.
 
-    power_timeseries.pdf          power over time by component: CPU packages, host DRAM,
-                                  and each GPU for one node; each component summed over
-                                  the nodes for several
-    power_timeseries_by_node.pdf  each node's measured total over time (several nodes only)
+    power_timeseries.pdf          one node: power over time of its CPU packages, host DRAM,
+                                  and each GPU
+    power_timeseries_total.pdf    several nodes: each component summed over the nodes
+    power_timeseries_by_node.pdf  several nodes: each node's measured total
+    power_timeseries_nodes/       several nodes: <node>_timeseries.pdf, as for one node
     energy_ring.pdf               the job's energy by component (two components or more)
+
+The names are those of the OOB report, so `ib/` and `oob/` hold the same views.
 
 Only the groups that enter job totals are drawn, so `psys` and `core` are left out. Each
 series is cut into at most MAX_POINTS time bins of at least MIN_BIN_SECONDS, and a bin's
@@ -160,8 +163,7 @@ def plot_report(export_dir: Path, result: Mapping[str, Any], record: Mapping[str
                 fig.savefig(path, dpi=150, bbox_inches="tight")
                 plt.close(fig)
 
-            if len(nodes) == 1:
-                components = per_node[nodes[0]]
+            def draw_node(path: Path, components: Sequence[Tuple[str, str, Series]]) -> None:
                 lines = []
                 gpu_index = 0
                 for label, group, series in components:
@@ -173,7 +175,10 @@ def plot_report(export_dir: Path, result: Mapping[str, Any], record: Mapping[str
                     lines.append((label, color, series))
                 if len(lines) > 1:  # on a CPU-only node the total is the CPU line again
                     lines.append(("IB total", TOTAL_COLOR, _add([series for _, _, series in components])))
-                draw(export_dir / "power_timeseries.pdf", lines, "Power (W)", (10, 5))
+                draw(path, lines, "Power (W)", (10, 5))
+
+            if len(nodes) == 1:
+                draw_node(export_dir / "power_timeseries.pdf", per_node[nodes[0]])
             else:
                 lines = []
                 for group, label in (*COMPONENTS, ("gpu", "GPU")):
@@ -183,7 +188,7 @@ def plot_report(export_dir: Path, result: Mapping[str, Any], record: Mapping[str
                         lines.append((f"{label} total", color, _add(parts)))
                 if len(lines) > 1:
                     lines.append(("IB total", TOTAL_COLOR, _add([series for _, _, series in lines])))
-                draw(export_dir / "power_timeseries.pdf", lines, "Total Power (W)", (10, 5))
+                draw(export_dir / "power_timeseries_total.pdf", lines, "Total Power (W)", (10, 5))
                 by_node = [(node, None, _add([series for _, _, series in per_node[node]])) for node in nodes]
                 fig, ax = plt.subplots(figsize=(12, 6))
                 for node, _, series in by_node:
@@ -192,6 +197,9 @@ def plot_report(export_dir: Path, result: Mapping[str, Any], record: Mapping[str
                 fig.tight_layout()
                 fig.savefig(export_dir / "power_timeseries_by_node.pdf", dpi=150, bbox_inches="tight")
                 plt.close(fig)
+                (export_dir / "power_timeseries_nodes").mkdir(exist_ok=True)
+                for node in nodes:
+                    draw_node(export_dir / "power_timeseries_nodes" / f"{node}_timeseries.pdf", per_node[node])
 
         segments = ring_segments(result["nodes"])
         if len(segments) >= 2:  # a single component would fill the whole ring
