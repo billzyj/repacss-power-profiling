@@ -171,7 +171,8 @@ def plot_report(export_dir: Path, result: Mapping[str, Any], record: Mapping[str
                     else:
                         color = POWER_DISTRIBUTION_TIME_SERIES_COLORS.get(label, "#95a5a6")
                     lines.append((label, color, series))
-                lines.append(("IB total", TOTAL_COLOR, _add([series for _, _, series in components])))
+                if len(lines) > 1:  # on a CPU-only node the total is the CPU line again
+                    lines.append(("IB total", TOTAL_COLOR, _add([series for _, _, series in components])))
                 draw(export_dir / "power_timeseries.pdf", lines, "Power (W)", (10, 5))
             else:
                 lines = []
@@ -180,7 +181,8 @@ def plot_report(export_dir: Path, result: Mapping[str, Any], record: Mapping[str
                     if parts:
                         color = POWER_DISTRIBUTION_RING_COLORS["GPU"] if group == "gpu" else POWER_DISTRIBUTION_TIME_SERIES_COLORS[label]
                         lines.append((f"{label} total", color, _add(parts)))
-                lines.append(("IB total", TOTAL_COLOR, _add([series for _, _, series in lines])))
+                if len(lines) > 1:
+                    lines.append(("IB total", TOTAL_COLOR, _add([series for _, _, series in lines])))
                 draw(export_dir / "power_timeseries.pdf", lines, "Total Power (W)", (10, 5))
                 by_node = [(node, None, _add([series for _, _, series in per_node[node]])) for node in nodes]
                 fig, ax = plt.subplots(figsize=(12, 6))
